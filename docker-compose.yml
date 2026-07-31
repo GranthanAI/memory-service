@@ -1,0 +1,23 @@
+services:
+  memory-service:
+    image: python:3.11-slim
+    container_name: graphgpt-memory-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    # Install dependencies and start the app without building a custom image
+    command: sh -c "pip install --no-cache-dir -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      - APP_ENV=production
+      - REDIS_URL=redis://host.docker.internal:6379/0
+      - MILVUS_HOST=host.docker.internal
+      - MILVUS_PORT=19530
+      - KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+      - GRAPH_SERVICE_URL=http://host.docker.internal:8001
+      - LLM_SERVICE_HOST=host.docker.internal
+      - LLM_SERVICE_PORT=50051
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
