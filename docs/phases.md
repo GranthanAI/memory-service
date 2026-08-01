@@ -35,31 +35,93 @@ This implementation plan outlines the 20 coding phases for building the **GraphG
 ### Phase 1: Environment & Project Setup
 * **Objective:** Establish the development environment, virtual runtime settings, and dependency locks.
 * **Tasks:**
-  * Configure `pyproject.toml` with dependencies: `fastapi`, `uvicorn`, `aiokafka`, `redis`, `pymilvus`, `grpcio`, `pydantic-settings`, `zlib`, `pytest`, `pytest-asyncio`.
+  * Configure `pyproject.toml` with all service dependencies:
+    * **Framework:** `fastapi`, `uvicorn`
+    * **Kafka:** `aiokafka`
+    * **Cache:** `redis[asyncio]`
+    * **Vector DB:** `pymilvus`
+    * **Persistent DB:** `cassandra-driver` *(new — Cassandra is the primary source of truth)*
+    * **AI/gRPC:** `grpcio`, `grpcio-tools`
+    * **Config:** `pydantic-settings`
+    * **Observability:** `prometheus-client`
+    * **Testing:** `pytest`, `pytest-asyncio`
+    * **Formatting:** `black`, `isort`, `flake8`
   * Create `requirements.txt` from the lock file.
-  * Define linting and formatting configurations (`black`, `flake8`, `isort`).
-  * Initialize the standard `.env` and `.env.example` configurations.
-* **Verification:** Run `pip install -r requirements.txt` and verify the virtual environment boots successfully.
+  * Initialize `.env` and `.env.example` with all configuration variables:
+    * Kafka: bootstrap servers, group ID, session timeout, all topic names (summary, fact, embedding, delete, DLQ)
+    * Redis: URL, snapshot TTL, idempotency TTL, lock TTL, watchdog interval
+    * Cassandra: hosts, port, keyspace, timeout
+    * Milvus: host, port, vector dimension, embedding model name and version, bulk insert batch size
+    * gRPC: LLM host, port, pool size, timeout, health check interval
+    * Graph Service: URL, timeout MS
+    * Outbox: poll interval MS, batch size, stale processing timeout minutes
+    * Circuit Breaker: failure threshold, recovery timeout, half-open limit
+    * Retrieval scoring weights, decay rate, top-k, fact merge threshold
+  * Create `.gitignore` to exclude `.env`, `__pycache__`, `.venv`, and `uv.lock`.
+* **Verification:** Run `uv sync` and `pip install -r requirements.txt`. Verify the virtual environment boots and `python -c "import fastapi, aiokafka, cassandra, pymilvus, redis"` succeeds.
 
 ---
 
 ### Phase 2: Configuration & Logging Core (`app/core/`)
-* **Objective:** Code the centralized system configuration loading and logging infrastructure.
+* **Objective:** Code the centralized system configuration loading and logging infrastructure for all downstream modules.
 * **Tasks:**
-  * Implement [config.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/core/config.py) using Pydantic Settings to load configurations (Kafka, Redis, Milvus, and gRPC endpoints).
-  * Write [logging.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/core/logging.py) to set up JSON log formatters that inject `trace_id`, `conversation_id`, `event_id`, and `summary_version`.
-  * Code [exceptions.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/core/exceptions.py) to declare system error classes (`CircuitBreakerOpenException`, `DeduplicationException`, `JobExecutionException`).
-* **Verification:** Write a test script inside `tests/` to print logging lines and assert configuration validations.
+  * Implement [config.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/core/config.py) using `pydantic-settings` `BaseSettings` (V2). Include all settings groups:
+    * **Kafka** (bootstrap servers, group ID, session timeout, all topic names)
+    * **Redis** (URL, TTLs, lock TTL, watchdog interval)
+    * **Cassandra** (hosts, port, keyspace, timeout) *(new)*
+    * **Milvus** (host, port, dimension, model name/version, bulk insert batch size)
+    * **gRPC** (LLM host/port, pool size, timeout, health check interval)
+    * **Graph Service** (URL, timeout MS) *(new — for graceful fallback)*
+    * **Outbox** (poll interval MS, batch size, stale processing minutes) *(new)*
+    * **Circuit Breaker** (failure threshold, recovery timeout, half-open limit) *(new)*
+    * **Retrieval** (scoring weights, decay rate, top-k, fact merge threshold)
+  * Write [logging.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/core/logging.py) with:
+    * Async-safe `ContextVar` bindings for `trace_id`, `conversation_id`, `event_id`, `summary_version`.
+    * `JSONFormatter` for production (structured JSON logs).
+    * `ConsoleFormatter` for development (human-readable prefixed logs).
+    * `setup_logging(debug_mode)` that switches formatters based on `settings.DEBUG`.
+  * Code [exceptions.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/core/exceptions.py) with:
+    * `MemoryServiceException` — base class.
+    * `CircuitBreakerOpenException(service_name)` — raised when the circuit breaker is OPEN.
+    * `DeduplicationException(event_id)` — raised when an event_id is already in `processed_events`.
+    * `JobExecutionException(job_type, job_id, message)` — raised when a worker job fails irrecoverably.
+* **Verification:** Run `uv run pytest tests/unit/test_core.py` — assert config defaults load cleanly, JSON log output includes trace context variables, and exceptions carry the correct metadata fields.
 
 ---
 
 ### Phase 3: Database Connection Adapters (`app/db/`)
-* **Objective:** Initialize connection pools for Redis and Milvus.
+* **Objective:** Initialize connection pools for Cassandra (primary store), Redis (hot cache), and Milvus (vector index). All three must be healthy before the service enters readiness.
 * **Tasks:**
-  * Code [db/redis.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/db/redis.py) to configure the `redis.asyncio` connection pooler.
-  * Code [db/milvus.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/db/milvus.py) to wrap `pymilvus` cluster initializations.
-  * Implement connection checks in `session.py` to manage pools during startup and shutdown lifecycles.
-* **Verification:** Run a mock ping test to verify connection pools can connect to local mock databases.
+  * Code [db/cassandra.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/db/cassandra.py) *(new — primary source of truth)*:
+    * Initialize a `cassandra.cluster.Cluster` with configurable `CASSANDRA_HOSTS` and `CASSANDRA_PORT`.
+    * Create a `Session` bound to `CASSANDRA_KEYSPACE`.
+    * Expose `get_session() -> Session` for repository injection.
+    * On first connect, execute CQL `CREATE KEYSPACE IF NOT EXISTS` and all 8 table schemas (see LLD §3):
+      * `conversation_snapshots`
+      * `conversation_summaries`
+      * `processed_events` (7-day TTL)
+      * `outbox_jobs` (partitioned by `status`)
+      * `outbox_processing_index` (for stale PROCESSING reaping without ALLOW FILTERING)
+      * `retry_jobs` (partitioned by `status`)
+      * `user_facts` (partitioned by `user_id, category`)
+      * `conversation_recent_messages` (durable short-term window backup)
+  * Code [db/redis.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/db/redis.py):
+    * Initialize a `redis.asyncio.ConnectionPool` from `REDIS_URL`.
+    * Expose `get_redis_client() -> aioredis.Redis` using the pool.
+    * Implement `init_redis_pool()` and `close_redis_pool()` lifecycle functions.
+  * Code [db/milvus.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/db/milvus.py):
+    * Wrap `pymilvus.connections.connect(host, port)` and `disconnect()`.
+    * Expose `check_milvus_ready()` via `utility.list_collections()` ping.
+  * Implement [db/session.py](file:///c:/Users/hp/Desktop/Granthan/memory-service/app/db/session.py):
+    * `initialize_db_sessions()` — starts all three pools in order: Cassandra → Redis → Milvus.
+    * Verifies each with a health check (Cassandra `SELECT now() FROM system.local`, Redis `PING`, Milvus `list_collections`).
+    * Raises `RuntimeError` with the identity of the failing service if any check fails.
+    * `close_db_sessions()` — gracefully disconnects all three pools.
+* **Verification:** Run `uv run pytest tests/unit/test_db.py` — mock all three drivers and assert that:
+  * `initialize_db_sessions()` calls `connect`, `ping`, and `list_collections` in the correct order.
+  * A Cassandra connection failure raises `RuntimeError` and triggers cleanup.
+  * A Redis ping failure raises `RuntimeError` and triggers cleanup.
+  * `close_db_sessions()` disconnects all three without errors.
 
 ---
 

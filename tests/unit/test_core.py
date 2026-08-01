@@ -19,16 +19,55 @@ from app.core.logging import (
 
 def test_system_settings_loading():
     """
-    Asserts configuration defaults load and validate.
+    Asserts all configuration groups load with correct defaults.
+    Covers all settings groups added in Phase 2 (LLD v3.1).
     """
+    # Core
     assert settings.APP_NAME == "graphgpt-memory-service"
+    assert settings.HTTP_PORT == 8000
+
+    # Cassandra (new — primary source of truth)
+    assert isinstance(settings.CASSANDRA_HOSTS, str)
+    assert settings.CASSANDRA_PORT == 9042
+    assert settings.CASSANDRA_KEYSPACE == "graphgpt_memory"
+    assert settings.CASSANDRA_TIMEOUT_SECONDS == 5.0
+
+    # Redis hot cache
     assert settings.SHORT_TERM_MESSAGE_LIMIT == 20
+    assert settings.IDEMPOTENCY_TTL_SECONDS == 604800    # 7 days
+    assert settings.REDIS_LOCK_TTL_SECONDS == 5
+    assert settings.REDIS_LOCK_WATCHDOG_INTERVAL == 2.0
+
+    # Milvus
     assert settings.VECTOR_DIMENSION == 1536
-    
-    # Verify we can load settings and override them with keyword arguments
+    assert settings.MILVUS_BULK_INSERT_BATCH_SIZE == 100
+
+    # gRPC pool (new)
+    assert settings.GRPC_POOL_SIZE == 5
+    assert settings.GRPC_HEALTH_CHECK_INTERVAL_SECONDS == 30.0
+
+    # Graph Service (new — graceful fallback)
+    assert settings.GRAPH_SERVICE_TIMEOUT_MS == 200
+
+    # Outbox (new — configurable polling)
+    assert settings.OUTBOX_POLL_INTERVAL_MS == 1000
+    assert settings.OUTBOX_BATCH_SIZE == 50
+    assert settings.OUTBOX_STALE_PROCESSING_MINUTES == 5
+
+    # Circuit Breaker (new)
+    assert settings.CB_FAILURE_THRESHOLD == 5
+    assert settings.CB_RECOVERY_TIMEOUT_SECONDS == 60.0
+    assert settings.CB_HALF_OPEN_LIMIT == 2
+
+    # Retrieval scoring
+    assert settings.RETRIEVAL_TOP_K_FACTS == 10
+    assert settings.FACT_MERGE_SIMILARITY_THRESHOLD == 0.85
+
+    # Custom override still works
     custom = SystemSettings(APP_NAME="custom-name", SHORT_TERM_MESSAGE_LIMIT=40)
     assert custom.APP_NAME == "custom-name"
     assert custom.SHORT_TERM_MESSAGE_LIMIT == 40
+
 
 def test_custom_exceptions():
     """
