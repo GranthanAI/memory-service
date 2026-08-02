@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package llm;
+
+service LLMService {
+  rpc GenerateSummary (SummaryRequest) returns (SummaryResponse);
+  rpc ExtractFacts (FactsRequest) returns (FactsResponse);
+  rpc GenerateEmbedding (EmbeddingRequest) returns (EmbeddingResponse);
+}
+
+message SummaryRequest {
+  string previous_summary = 1;
+  string new_messages_json = 2;
+  string instructions = 3;
+}
+
+message SummaryResponse {
+  string summary_text = 1;
+}
+
+message FactsRequest {
+  string previous_summary = 1;
+  string new_messages_json = 2;
+  string instructions = 3;
+}
+
+message FactsResponse {
+  repeated string facts = 1;
+}
+
+message EmbeddingRequest {
+  string text = 1;
+  string model_name = 2;
+}
+
+message EmbeddingResponse {
+  repeated float embedding = 1;
+}
