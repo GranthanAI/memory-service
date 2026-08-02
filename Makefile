@@ -22,7 +22,7 @@ run:
 
 # Start existing infrastructure containers on the host
 infra:
-	docker start graphgpt-redis graphgpt-kafka milvus-etcd milvus-minio milvus-standalone
+	docker start graphgpt-redis graphgpt-kafka graphgpt-cassandra milvus-etcd milvus-minio milvus-standalone
 
 # Stop existing infrastructure containers on the host
 infra-down:
