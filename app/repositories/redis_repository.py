@@ -213,3 +213,7 @@ class RedisRepository:
             logger.debug(f"Invalidated Redis cache keys for conversation '{conversation_id}'.")
         except Exception as e:
             logger.error(f"Error invalidating cache for {conversation_id}: {e}")
+
+    async def invalidate_context_cache(self, conversation_id: str) -> None:
+        """Alias for invalidate_conversation matching low-level design specification."""
+        await self.invalidate_conversation(conversation_id)
