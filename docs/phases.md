@@ -317,3 +317,79 @@ This implementation plan outlines the 20 coding phases for building the **GraphG
   * Export Prometheus metrics.
 * **Verification:** Run load tests validating latency profiles, check `/ready` output, and verify cleanup reaper resets stuck jobs cleanly.
 
+---
+
+### Phase 21: Database Migration System
+* **Objective:** Establish standard database schema versioning and bootstrap validation.
+* **Tasks:**
+  * Implement Cassandra schema versioning tracker.
+  * Code migration scripts representing incremental schema updates.
+  * Execute validation checks on startup to verify all columns and keyspaces are correct.
+
+---
+
+### Phase 22: Dependency Injection Container
+* **Objective:** Centralize service providers, client registration, and wiring.
+* **Tasks:**
+  * Register repository providers, service providers, and singleton clients.
+  * Configure dependency wiring for pipeline background workers.
+
+---
+
+### Phase 23: Graph Service Client
+* **Objective:** Create a dedicated Graph Service client with robust networking policies.
+* **Tasks:**
+  * Build Graph Client abstraction with connection pooling.
+  * Wrap Graph HTTP operations with configurable timeout, retry mechanisms, and circuit breakers.
+
+---
+
+### Phase 24: Embedding Client Abstraction
+* **Objective:** Decouple embedding tasks from the general LLM inference pool.
+* **Tasks:**
+  * Implement pluggable embedding client adapters.
+  * Prepare configurations for future model replacements.
+
+---
+
+### Phase 25: Service-to-Service Security
+* **Objective:** Secure internal endpoints from unauthorized access.
+* **Tasks:**
+  * Implement internal JWT or API Key verification.
+  * Create authorization middleware for internal APIs.
+  * Optionally configure mTLS for secure network transport.
+
+---
+
+### Phase 26: Startup Validation
+* **Objective:** Perform validation checks across all dependency layers at boot time.
+* **Tasks:**
+  * Verify Cassandra keyspace/tables and Kafka topic existences.
+  * Verify Milvus collections/indexes, Redis connectivity, and Graph Service / LLM Service endpoints are reachable.
+
+---
+
+### Phase 27: Graceful Shutdown
+* **Objective:** Establish clean termination sequences for all workers and client connections.
+* **Tasks:**
+  * Stop active Kafka consumers, finish in-flight jobs, and commit offsets.
+  * Close gRPC channels, Cassandra, Redis, and Milvus pools.
+
+---
+
+### Phase 28: Operational Metrics
+* **Objective:** Expose real-time indicators of performance and queue sizes.
+* **Tasks:**
+  * Track Kafka consumer lag, queue sizes, and Redis cache hit/miss ratios.
+  * Capture latency histograms for Cassandra, Milvus, gRPC, and Context assembly.
+  * Monitor circuit breaker states.
+
+---
+
+### Phase 29: Memory Maintenance Worker
+* **Objective:** Automate database pruning and cleanups.
+* **Tasks:**
+  * Code background sweeping cron/worker to sweep expired data, stale retry jobs, and expired locks.
+  * Compact message windows and delete orphaned vector representations.
+
+
