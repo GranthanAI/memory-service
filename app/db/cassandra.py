@@ -215,8 +215,11 @@ def connect_cassandra() -> None:
     _session = _cluster.connect(settings.CASSANDRA_KEYSPACE)
     logger.info(f"Cassandra session bound to keyspace '{settings.CASSANDRA_KEYSPACE}'.")
 
-    _apply_schema(_session)
-    logger.info("Cassandra schema initialization complete.")
+    from app.db.migrations import MigrationManager
+    manager = MigrationManager(_session)
+    manager.run_migrations()
+    manager.validate_schema()
+    logger.info("Cassandra schema migration and validation complete.")
 
 
 def _apply_schema(session: Session) -> None:
