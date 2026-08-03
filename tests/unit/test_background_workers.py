@@ -25,11 +25,11 @@ from app.workers.delete_worker import DeleteWorker
 def mock_worker_dependencies():
     session = MagicMock()
     memory_service = MagicMock()
-    memory_service.transition_state = AsyncMock()
+    memory_service.transition_state = AsyncMock(return_value={"fact_version": 1, "summary_version": 2})
     memory_service.handle_failure = AsyncMock()
     
     summary_service = MagicMock()
-    summary_service.process_incremental_summary = AsyncMock()
+    summary_service.process_incremental_summary = AsyncMock(return_value={"summary_version": 2})
     
     memory_repo = MagicMock()
     memory_repo.get_summary = AsyncMock()
@@ -41,10 +41,13 @@ def mock_worker_dependencies():
     llm_client = MagicMock()
     llm_client.call_with_circuit_breaker = AsyncMock()
     
+    embedding_client = MagicMock()
+    embedding_client.generate_embedding = AsyncMock()
+    
     milvus_repo = MagicMock()
     milvus_repo.delete_fact = MagicMock()
     
-    return session, memory_service, summary_service, memory_repo, long_memory_service, llm_client, milvus_repo
+    return session, memory_service, summary_service, memory_repo, long_memory_service, llm_client, embedding_client, milvus_repo
 
 
 def mock_kafka_consumer(msg):
@@ -52,7 +55,17 @@ def mock_kafka_consumer(msg):
     mock_consumer = MagicMock()
     mock_consumer.start = AsyncMock()
     mock_consumer.stop = AsyncMock()
-    mock_consumer.getmany = AsyncMock(return_value={MagicMock(): [msg]})
+
+    called = []
+
+    async def getmany_mock(*args, **kwargs):
+        await asyncio.sleep(0.001)
+        if not called:
+            called.append(True)
+            return {MagicMock(): [msg]}
+        return {}
+
+    mock_consumer.getmany = getmany_mock
     mock_consumer.commit = AsyncMock()
     return mock_consumer
 
@@ -62,7 +75,7 @@ def mock_kafka_consumer(msg):
 @pytest.mark.asyncio
 async def test_summary_worker_success(mock_worker_dependencies):
     """SummaryWorker transitions snapshot states and schedules fact extraction on success."""
-    session, memory_service, summary_service, _, _, _, _ = mock_worker_dependencies
+    session, memory_service, summary_service, _, _, _, _, _ = mock_worker_dependencies
     
     cassandra_repo = MagicMock()
     worker = SummaryWorker(session, memory_service, summary_service)
@@ -97,7 +110,7 @@ async def test_summary_worker_success(mock_worker_dependencies):
 @pytest.mark.asyncio
 async def test_summary_worker_failure_triggers_retry(mock_worker_dependencies):
     """SummaryWorker failures trigger state failure handler retry flows."""
-    session, memory_service, summary_service, _, _, _, _ = mock_worker_dependencies
+    session, memory_service, summary_service, _, _, _, _, _ = mock_worker_dependencies
     
     worker = SummaryWorker(session, memory_service, summary_service)
 
@@ -132,7 +145,7 @@ async def test_summary_worker_failure_triggers_retry(mock_worker_dependencies):
 @pytest.mark.asyncio
 async def test_fact_worker_success(mock_worker_dependencies):
     """FactWorker extracts facts via LLM client and schedules vector embedding."""
-    session, memory_service, _, memory_repo, _, llm_client, _ = mock_worker_dependencies
+    session, memory_service, _, memory_repo, _, llm_client, _, _ = mock_worker_dependencies
     
     cassandra_repo = MagicMock()
     worker = FactWorker(session, memory_service, memory_repo, llm_client)
@@ -181,9 +194,9 @@ def test_parse_fact_string():
 @pytest.mark.asyncio
 async def test_embedding_worker_success(mock_worker_dependencies):
     """EmbeddingWorker generates embedding vectors and merges facts, transitioning state back to ACTIVE."""
-    session, memory_service, _, _, long_memory_service, llm_client, _ = mock_worker_dependencies
+    session, memory_service, _, _, long_memory_service, _, embedding_client, _ = mock_worker_dependencies
     
-    worker = EmbeddingWorker(session, memory_service, long_memory_service, llm_client)
+    worker = EmbeddingWorker(session, memory_service, long_memory_service, embedding_client)
 
     payload = {
         "conversation_id": "conv-123",
@@ -193,7 +206,7 @@ async def test_embedding_worker_success(mock_worker_dependencies):
     }
     
     # Mock LLM return embedding
-    llm_client.call_with_circuit_breaker.return_value = [0.1] * 1536
+    embedding_client.generate_embedding.return_value = [0.1] * 1536
 
     msg = MagicMock(value=json.dumps(payload).encode("utf-8"))
     mock_consumer = mock_kafka_consumer(msg)
@@ -203,7 +216,7 @@ async def test_embedding_worker_success(mock_worker_dependencies):
         await worker.stop()
 
     # Assertions
-    llm_client.call_with_circuit_breaker.assert_called_once()
+    embedding_client.generate_embedding.assert_called_once_with("User likes coffee")
     long_memory_service.merge_user_facts.assert_called_once()
     
     # Check transitions to READY and then ACTIVE
@@ -216,7 +229,7 @@ async def test_embedding_worker_success(mock_worker_dependencies):
 @pytest.mark.asyncio
 async def test_delete_worker_specific_fact(mock_worker_dependencies):
     """DeleteWorker deletes specific facts from Cassandra and Milvus."""
-    session, _, _, _, _, _, milvus_repo = mock_worker_dependencies
+    session, _, _, _, _, _, _, milvus_repo = mock_worker_dependencies
     
     cassandra_repo = MagicMock()
     worker = DeleteWorker(session, milvus_repo)
@@ -243,7 +256,7 @@ async def test_delete_worker_specific_fact(mock_worker_dependencies):
 @pytest.mark.asyncio
 async def test_delete_worker_by_conversation(mock_worker_dependencies):
     """DeleteWorker purges all facts associated with a target conversation ID."""
-    session, _, _, _, _, _, milvus_repo = mock_worker_dependencies
+    session, _, _, _, _, _, _, milvus_repo = mock_worker_dependencies
     
     cassandra_repo = MagicMock()
     worker = DeleteWorker(session, milvus_repo)

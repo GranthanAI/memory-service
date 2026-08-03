@@ -17,6 +17,7 @@ from app.db.cassandra import get_session
 from app.db.session import initialize_db_sessions, close_db_sessions
 from app.models.memory import MemoryState
 from app.repositories.cassandra_repository import CassandraRepository
+from app.repositories.processed_event_repository import ProcessedEventRepository
 from app.repositories.redis_repository import RedisRepository
 from app.repositories.memory_repository import MemoryRepository
 from app.services.snapshot_service import SnapshotService
@@ -71,6 +72,7 @@ async def test_event_dispatcher_and_idempotency_integration(clean_pipeline_table
     """
     session = get_session()
     cassandra_repo = CassandraRepository(session)
+    processed_event_repo = ProcessedEventRepository(session)
     # Using mock redis for test integration simplicity
     redis_repo = MagicMock(spec=RedisRepository)
     redis_repo.get_snapshot = AsyncMock(return_value=None)
@@ -84,7 +86,7 @@ async def test_event_dispatcher_and_idempotency_integration(clean_pipeline_table
 
     # Set threshold to 2 to verify outbox triggers
     dispatcher = EventDispatcher(
-        processed_event_repo=cassandra_repo,
+        processed_event_repo=processed_event_repo,
         memory_repo=memory_repo,
         snapshot_service=snapshot_service,
         summary_threshold=2
@@ -122,7 +124,7 @@ async def test_event_dispatcher_and_idempotency_integration(clean_pipeline_table
     assert messages[0]["content"] == "First integration message"
 
     # Verify event ID registered in Cassandra
-    assert cassandra_repo.is_event_processed(event_id) is True
+    assert processed_event_repo.is_event_processed(event_id) is True
 
     # 2. Dispatch the exact same event again (duplicate replay)
     await dispatcher.dispatch(raw_event)

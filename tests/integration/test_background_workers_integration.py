@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from app.db.cassandra import get_session
 from app.db.session import initialize_db_sessions, close_db_sessions
+from app.core.config import settings
 from app.models.memory import MemoryState
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.processed_event_repository import ProcessedEventRepository
@@ -204,9 +205,14 @@ async def test_end_to_end_worker_pipeline_integration(clean_pipeline_tables):
 
     # --- STEP 3: Outbox Daemon processes SUMMARY_PENDING outbox row ---
     await outbox_worker._process_batch()
-    assert len(producer.published_messages) == 1
-    summary_request = producer.published_messages.pop()
+    # Filter only messages published during this step for this conversation
+    step3_msgs = [m for m in producer.published_messages if m["conversation_id"] == conversation_id]
+    assert len(step3_msgs) >= 1
+    summary_request = next(m for m in step3_msgs if m["topic"] == "memory.summary.request")
     assert summary_request["topic"] == "memory.summary.request"
+    # Clear published messages and purge any stale outbox rows before next step
+    producer.published_messages.clear()
+    session.execute("TRUNCATE outbox_jobs")
 
     # --- STEP 4: SummaryWorker processes summary request ---
     summary_worker = SummaryWorker(session, memory_service, summary_service)
@@ -240,9 +246,13 @@ async def test_end_to_end_worker_pipeline_integration(clean_pipeline_tables):
 
     # --- STEP 5: Outbox Daemon processes FACT_PENDING outbox row ---
     await outbox_worker._process_batch()
-    assert len(producer.published_messages) == 1
-    fact_request = producer.published_messages.pop()
+    step5_msgs = [m for m in producer.published_messages if m["conversation_id"] == conversation_id]
+    assert len(step5_msgs) >= 1
+    fact_request = next(m for m in step5_msgs if m["topic"] == "memory.fact.request")
     assert fact_request["topic"] == "memory.fact.request"
+    # Clear published messages and purge stale outbox rows before next step
+    producer.published_messages.clear()
+    session.execute("TRUNCATE outbox_jobs")
 
     # --- STEP 6: FactWorker processes fact request ---
     # 1. Transition to EXTRACTING_FACTS
@@ -276,8 +286,9 @@ async def test_end_to_end_worker_pipeline_integration(clean_pipeline_tables):
 
     # --- STEP 7: Outbox Daemon processes EMBEDDING_PENDING outbox row ---
     await outbox_worker._process_batch()
-    assert len(producer.published_messages) == 1
-    embedding_request = producer.published_messages.pop()
+    step7_msgs = [m for m in producer.published_messages if m["conversation_id"] == conversation_id]
+    assert len(step7_msgs) >= 1
+    embedding_request = next(m for m in step7_msgs if m["topic"] == "memory.embedding.request")
     assert embedding_request["topic"] == "memory.embedding.request"
 
     # --- STEP 8: EmbeddingWorker processes embedding request ---

@@ -13,6 +13,7 @@ from app.db.cassandra import get_session
 from app.db.redis import get_redis_client
 from app.clients.llm_client import AsyncGRPCConnectionPool, LLMClient
 from app.clients.graph_client import GraphClient
+from app.clients.embedding_client import EmbeddingClient, GRPCEmbeddingClient, MockEmbeddingClient
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.redis_repository import RedisRepository
 from app.repositories.processed_event_repository import ProcessedEventRepository
@@ -43,6 +44,7 @@ class Container:
         self.llm_pool: Optional[AsyncGRPCConnectionPool] = None
         self.llm_client: Optional[LLMClient] = None
         self.graph_client: Optional[GraphClient] = None
+        self.embedding_client: Optional[EmbeddingClient] = None
 
         # Repositories
         self.cassandra_repo: Optional[CassandraRepository] = None
@@ -71,7 +73,7 @@ class Container:
         self.redis_client = get_redis_client()
         self.milvus_repo = MilvusRepository()
 
-        # 2. Build gRPC clients
+        # 2. Build clients
         self.llm_pool = AsyncGRPCConnectionPool(
             target=f"{settings.LLM_SERVICE_HOST}:{settings.LLM_SERVICE_PORT}",
             pool_size=settings.GRPC_POOL_SIZE
@@ -80,6 +82,18 @@ class Container:
         self.llm_client = LLMClient(self.llm_pool)
 
         self.graph_client = GraphClient(base_url=settings.GRAPH_SERVICE_URL)
+        await self.graph_client.connect()
+
+        # Pluggable Embedding Client
+        client_type = settings.EMBEDDING_CLIENT_TYPE.lower().strip()
+        if client_type == "mock":
+            self.embedding_client = MockEmbeddingClient()
+        else:
+            self.embedding_client = GRPCEmbeddingClient(
+                target=f"{settings.LLM_SERVICE_HOST}:{settings.LLM_SERVICE_PORT}",
+                pool_size=settings.GRPC_POOL_SIZE
+            )
+        await self.embedding_client.connect()
 
         # 3. Setup Repositories
         self.cassandra_repo = CassandraRepository(self.cassandra_session)
@@ -115,4 +129,18 @@ class Container:
                 logger.info("✓ LLM Connection Pool closed.")
             except Exception as e:
                 logger.error(f"Error closing LLM pool: {e}")
+                
+        if self.embedding_client:
+            try:
+                await self.embedding_client.close()
+                logger.info("✓ Embedding Client closed.")
+            except Exception as e:
+                logger.error(f"Error closing embedding client: {e}")
+
+        if self.graph_client:
+            try:
+                await self.graph_client.close()
+                logger.info("✓ Graph Client closed.")
+            except Exception as e:
+                logger.error(f"Error closing graph client: {e}")
         logger.info("Container teardown finished.")

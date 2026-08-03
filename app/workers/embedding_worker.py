@@ -14,8 +14,7 @@ from aiokafka import AIOKafkaConsumer
 
 from app.core.config import settings
 from app.models.memory import MemoryState
-from app.clients.llm_client import LLMClient
-from app.proto import llm_pb2, llm_pb2_grpc
+from app.clients.embedding_client import EmbeddingClient
 from app.services.memory_service import MemoryService
 from app.services.long_memory_service import LongMemoryService
 
@@ -50,14 +49,14 @@ class EmbeddingWorker:
         cassandra_session,
         memory_service: MemoryService,
         long_memory_service: LongMemoryService,
-        llm_client: LLMClient,
+        embedding_client: EmbeddingClient,
         bootstrap_servers: str = settings.KAFKA_BOOTSTRAP_SERVERS,
         group_id: str = "embedding-worker-group"
     ):
         self.session = cassandra_session
         self.memory_service = memory_service
         self.long_memory_service = long_memory_service
-        self.llm_client = llm_client
+        self.embedding_client = embedding_client
         self.bootstrap_servers = bootstrap_servers
         self.group_id = group_id
         self._consumer = None
@@ -110,20 +109,8 @@ class EmbeddingWorker:
                                 if not statement:
                                     continue
 
-                                # Call LLM GenerateEmbedding via circuit breaker
-                                async def embed_stub(channel) -> List[float]:
-                                    stub = llm_pb2_grpc.LLMServiceStub(channel)
-                                    request = llm_pb2.EmbeddingRequest(
-                                        text=statement,
-                                        model_name=settings.EMBEDDING_MODEL_NAME
-                                    )
-                                    response = await stub.GenerateEmbedding(
-                                        request,
-                                        timeout=settings.GRPC_TIMEOUT_SECONDS
-                                    )
-                                    return list(response.embedding)
-
-                                vector = await self.llm_client.call_with_circuit_breaker(embed_stub)
+                                # Generate embedding via the abstract client
+                                vector = await self.embedding_client.generate_embedding(statement)
                                 
                                 incoming_facts.append({
                                     "statement": statement,

@@ -57,6 +57,7 @@ class SystemSettings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "text-embedding-3-small"
     EMBEDDING_MODEL_VERSION: str = "v1.0.0"
     MILVUS_BULK_INSERT_BATCH_SIZE: int = 100   # Vectors per Milvus insert batch
+    EMBEDDING_CLIENT_TYPE: str = "grpc"         # "grpc" | "mock"
 
     # ─── gRPC — LLM Service Pool ─────────────────────────────────────────────
     LLM_SERVICE_HOST: str = "localhost"
