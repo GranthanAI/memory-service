@@ -67,8 +67,8 @@ class SnapshotService:
         self,
         snapshot: Dict[str, Any],
         event_id: str,
-        outbox_topic: str,
-        outbox_payload: Dict[str, Any],
+        outbox_topic: Optional[str] = None,
+        outbox_payload: Optional[Dict[str, Any]] = None,
         message: Optional[Dict[str, Any]] = None
     ) -> None:
         """
@@ -118,22 +118,23 @@ class SnapshotService:
         ))
 
         # 4. Add Outbox Job Creation
-        job_id = uuid.uuid4()
-        serialized_payload = json.dumps(outbox_payload)
-        batch.add(self._outbox_insert, (
-            now,
-            job_id,
-            outbox_topic,
-            snapshot["conversation_id"],
-            serialized_payload
-        ))
+        if outbox_topic and outbox_payload is not None:
+            job_id = uuid.uuid4()
+            serialized_payload = json.dumps(outbox_payload)
+            batch.add(self._outbox_insert, (
+                now,
+                job_id,
+                outbox_topic,
+                snapshot["conversation_id"],
+                serialized_payload
+            ))
 
         # Execute the logged batch synchronously
         self.session.execute(batch)
         logger.info(
-            f"Successfully committed snapshot batch for conversation {snapshot['conversation_id']} "
-            f"and outbox job {job_id}."
+            f"Successfully committed snapshot batch for conversation {snapshot['conversation_id']}."
         )
+
 
     async def post_commit_invalidation(self, conversation_id: str) -> None:
         """
