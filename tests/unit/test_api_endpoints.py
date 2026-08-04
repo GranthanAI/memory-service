@@ -190,7 +190,9 @@ class TestReadinessProbe:
 
 class TestMemoryContextEndpoint:
     @pytest.fixture(autouse=True)
-    def cleanup(self):
+    def setup_security_override(self):
+        from app.core.security import verify_service_auth
+        app.dependency_overrides[verify_service_auth] = lambda: {"identity": "test"}
         yield
         clear_overrides()
 
@@ -215,6 +217,66 @@ class TestMemoryContextEndpoint:
         assert body["short_term"][0]["content"] == "Hello"
         assert isinstance(body["context_version"], int)
         assert "built_at" in body
+
+    def test_context_unauthorized_missing_credentials(self):
+        from app.core.security import verify_service_auth
+        if verify_service_auth in app.dependency_overrides:
+            del app.dependency_overrides[verify_service_auth]
+        
+        mock_builder = make_mock_context_builder()
+        app.dependency_overrides[get_context_builder] = lambda: mock_builder
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/internal/memory/context",
+                json={
+                    "conversation_id": "conv-test-001",
+                    "user_id": "user-test-001",
+                    "query": "What are my food preferences?",
+                    "top_k_facts": 5,
+                },
+            )
+        assert response.status_code == 401
+
+    def test_context_authorized_with_api_key(self):
+        from app.core.security import verify_service_auth
+        if verify_service_auth in app.dependency_overrides:
+            del app.dependency_overrides[verify_service_auth]
+        
+        mock_builder = make_mock_context_builder()
+        app.dependency_overrides[get_context_builder] = lambda: mock_builder
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/internal/memory/context",
+                headers={"X-API-Key": "graphgpt-memory-secret"},
+                json={
+                    "conversation_id": "conv-test-001",
+                    "user_id": "user-test-001",
+                    "query": "What are my food preferences?",
+                    "top_k_facts": 5,
+                },
+            )
+        assert response.status_code == 200
+
+    def test_context_authorized_with_jwt(self):
+        from app.core.security import verify_service_auth, generate_jwt
+        if verify_service_auth in app.dependency_overrides:
+            del app.dependency_overrides[verify_service_auth]
+        
+        token = generate_jwt({"sub": "test-service"}, secret_key="graphgpt-jwt-secret")
+        mock_builder = make_mock_context_builder()
+        app.dependency_overrides[get_context_builder] = lambda: mock_builder
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/internal/memory/context",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "conversation_id": "conv-test-001",
+                    "user_id": "user-test-001",
+                    "query": "What are my food preferences?",
+                    "top_k_facts": 5,
+                },
+            )
+        assert response.status_code == 200
 
     def test_context_missing_required_fields(self):
         with TestClient(app, raise_server_exceptions=False) as client:

@@ -35,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import get_context_builder
 from app.core.metrics import CTX_BUILD
+from app.core.security import verify_service_auth
 from app.schemas.requests import GetContextRequest
 from app.schemas.responses import (
     FactResponse,
@@ -101,6 +102,7 @@ def _to_fact_response(fact: Dict[str, Any]) -> FactResponse:
 async def get_memory_context(
     request: GetContextRequest,
     context_builder: ContextBuilder = Depends(get_context_builder),
+    auth: dict = Depends(verify_service_auth),
 ) -> MemoryContextResponse:
     """
     Primary context retrieval endpoint.

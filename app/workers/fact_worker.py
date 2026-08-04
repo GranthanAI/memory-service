@@ -178,11 +178,20 @@ class FactWorker:
 
     async def stop(self) -> None:
         """Gracefully stops the worker connection and loops."""
+        logger.info("Initiating graceful shutdown for FactWorker...")
         self.is_running = False
         if self._task:
-            self._task.cancel()
             try:
-                await self._task
+                # Wait up to 10 seconds for the active message batch to finish processing
+                await asyncio.wait_for(asyncio.shield(self._task), timeout=10.0)
+                logger.info("FactWorker loop exited cleanly.")
+            except asyncio.TimeoutError:
+                logger.warning("Graceful shutdown timed out. Forcefully cancelling FactWorker loop.")
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
             except asyncio.CancelledError:
                 pass
             self._task = None

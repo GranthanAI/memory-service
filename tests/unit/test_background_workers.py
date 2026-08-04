@@ -291,3 +291,63 @@ async def test_delete_worker_by_conversation(mock_worker_dependencies):
     # Verify delete triggered only on fact_id_1 (matching conv-target)
     cassandra_repo.delete_fact.assert_called_once_with("user-123", "preferences", fact_id_1)
     milvus_repo.delete_fact.assert_called_once_with("user-123", str(fact_id_1))
+
+
+# ─── Graceful Shutdown Tests ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_summary_worker_graceful_shutdown(mock_worker_dependencies):
+    """Verifies that stop() allows an in-flight job to finish and commit offsets before exiting."""
+    session, memory_service, summary_service, _, _, _, _, _ = mock_worker_dependencies
+    
+    cassandra_repo = MagicMock()
+    worker = SummaryWorker(session, memory_service, summary_service)
+    worker.cassandra_repo = cassandra_repo
+
+    payload = {
+        "conversation_id": "conv-graceful",
+        "user_id": "user-graceful",
+        "version": 1,
+        "attempt_count": 0
+    }
+    
+    # Message processing is simulated to take some time
+    async def process_mock(*args, **kwargs):
+        await asyncio.sleep(0.1)  # Simulate slow LLM call
+        return {"summary_version": 2}
+    summary_service.process_incremental_summary.side_effect = process_mock
+
+    # Mock AIOKafka message poll returning one batch and then blocking/empty
+    msg = MagicMock(value=json.dumps(payload).encode("utf-8"))
+    
+    mock_consumer = MagicMock()
+    mock_consumer.start = AsyncMock()
+    mock_consumer.stop = AsyncMock()
+    
+    # getmany returns the message once, then returns empty dict
+    called = []
+    async def getmany_mock(*args, **kwargs):
+        if not called:
+            called.append(True)
+            return {MagicMock(): [msg]}
+        # Keep returning empty to avoid high CPU spin in test
+        await asyncio.sleep(0.01)
+        return {}
+    mock_consumer.getmany = getmany_mock
+    mock_consumer.commit = AsyncMock()
+
+    with patch("app.workers.summary_worker.AIOKafkaConsumer", return_value=mock_consumer):
+        # 1. Start the worker task in the background
+        await worker.start()
+        
+        # 2. Wait slightly for the consumer to poll the message, then call stop()
+        await asyncio.sleep(0.02)
+        
+        # 3. Stop should wait for the in-flight process (0.1s sleep) to finish
+        await worker.stop()
+
+    # 4. Assert that processing completed fully and offsets were committed
+    memory_service.transition_state.assert_any_call("conv-graceful", MemoryState.SUMMARIZING)
+    memory_service.transition_state.assert_any_call("conv-graceful", MemoryState.FACT_PENDING)
+    mock_consumer.commit.assert_called_once()
+

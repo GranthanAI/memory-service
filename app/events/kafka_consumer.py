@@ -95,12 +95,21 @@ class KafkaEventConsumer:
                 await asyncio.sleep(2.0)
 
     async def stop(self) -> None:
-        """Gracefully halts the consumer loop and clean connection handles."""
+        """Gracefully halts the consumer loop and cleans connection handles."""
+        logger.info("Initiating graceful shutdown for Kafka Consumer...")
         self.is_running = False
         if self._task:
-            self._task.cancel()
             try:
-                await self._task
+                # Wait up to 10 seconds for the active message batch to finish processing
+                await asyncio.wait_for(asyncio.shield(self._task), timeout=10.0)
+                logger.info("Kafka Consumer loop exited cleanly.")
+            except asyncio.TimeoutError:
+                logger.warning("Graceful shutdown timed out. Forcefully cancelling Kafka Consumer loop.")
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
             except asyncio.CancelledError:
                 pass
             self._task = None

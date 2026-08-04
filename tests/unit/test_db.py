@@ -21,7 +21,7 @@ from app.db.session import initialize_db_sessions, close_db_sessions
 def _mock_cassandra_session():
     """Returns a mock Cassandra session that reports healthy."""
     session = MagicMock()
-    session.execute = MagicMock(return_value=None)
+    session.execute = MagicMock(return_value=[])
     return session
 
 
@@ -45,7 +45,8 @@ class TestCassandraAdapter:
         mock_cluster = _mock_cassandra_cluster(mock_session)
 
         with patch("app.db.cassandra.Cluster", return_value=mock_cluster) as mock_cluster_cls, \
-             patch("app.db.cassandra.settings") as mock_settings:
+             patch("app.db.cassandra.settings") as mock_settings, \
+             patch("app.db.migrations.MigrationManager") as mock_migration_manager:
 
             mock_settings.CASSANDRA_HOSTS = "10.0.0.1,10.0.0.2,10.0.0.3"
             mock_settings.CASSANDRA_PORT = 9042

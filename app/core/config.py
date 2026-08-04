@@ -84,6 +84,15 @@ class SystemSettings(BaseSettings):
     # ─── Retrieval Scoring ────────────────────────────────────────────────────
     # Final score = (similarity × W_SIM) + (recency × W_REC) + (importance × W_IMP)
     # Weights must sum to 1.0.
+    # ─── Service-to-Service Security ──────────────────────────────────────────
+    API_KEY_HEADER: str = "X-API-Key"
+    API_KEY: str = "graphgpt-memory-secret"
+    JWT_SECRET_KEY: str = "graphgpt-jwt-secret"
+    JWT_ALGORITHM: str = "HS256"
+
+    # ─── Startup Validation ───────────────────────────────────────────────────
+    STRICT_STARTUP_VALIDATION: bool = False
+
     RETRIEVAL_WEIGHT_SIMILARITY: float = 0.5
     RETRIEVAL_WEIGHT_RECENCY: float = 0.2
     RETRIEVAL_WEIGHT_IMPORTANCE: float = 0.3

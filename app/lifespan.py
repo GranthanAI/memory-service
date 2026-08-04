@@ -31,6 +31,10 @@ async def lifespan(app: FastAPI):
     container = Container()
     await container.init_resources()
     
+    # 3. Perform Boot-time startup validation checks
+    from app.core.startup_validation import validate_startup_dependencies
+    await validate_startup_dependencies(container)
+    
     # Store container in app state for access in endpoints & worker threads
     app.state.container = container
     
