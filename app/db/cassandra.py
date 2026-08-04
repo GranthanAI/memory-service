@@ -112,11 +112,14 @@ _DDL_STATEMENTS = [
     # Table 5: Outbox Processing Index
     # Avoids ALLOW FILTERING on outbox_jobs for stale PROCESSING reaping.
     # Cleanup worker queries this table by (claimed_date, claimed_at) range.
+    # created_at carries the outbox_jobs PK component (status, created_at, job_id)
+    # so the reaper can issue a targeted LWT UPDATE without secondary lookup.
     """
     CREATE TABLE IF NOT EXISTS outbox_processing_index (
         claimed_date        TEXT,
         claimed_at          TIMESTAMP,
         job_id              UUID,
+        created_at          TIMESTAMP,
         PRIMARY KEY ((claimed_date), claimed_at, job_id)
     ) WITH CLUSTERING ORDER BY (claimed_at ASC, job_id ASC);
     """,

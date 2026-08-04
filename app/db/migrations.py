@@ -57,10 +57,30 @@ class Migration2_AddSnapshotMetadata(Migration):
         session.execute(SimpleStatement(alter_statement))
 
 
+class Migration3_AddCreatedAtToProcessingIndex(Migration):
+    """Migration 3: Add created_at column to outbox_processing_index.
+
+    The CleanupWorker needs created_at from the index to issue targeted
+    LWT UPDATE on outbox_jobs (which has PRIMARY KEY (status, created_at, job_id))
+    without needing ALLOW FILTERING on the main table.
+    """
+    version = 3
+    description = "Add created_at column to outbox_processing_index"
+
+    def upgrade(self, session) -> None:
+        logger.info(
+            "Applying Migration 3: Adding 'created_at' column to outbox_processing_index..."
+        )
+        session.execute(SimpleStatement(
+            "ALTER TABLE outbox_processing_index ADD created_at TIMESTAMP;"
+        ))
+
+
 # List of all migrations in chronological order
 MIGRATIONS: list[Migration] = [
     Migration1_InitialSchema(),
     Migration2_AddSnapshotMetadata(),
+    Migration3_AddCreatedAtToProcessingIndex(),
 ]
 
 
@@ -124,7 +144,7 @@ class MigrationManager:
             "conversation_summaries": ["conversation_id", "summary_text", "summary_version"],
             "processed_events": ["event_id", "conversation_id", "processed_at"],
             "outbox_jobs": ["job_id", "status", "topic", "payload"],
-            "outbox_processing_index": ["claimed_date", "claimed_at", "job_id"],
+            "outbox_processing_index": ["claimed_date", "claimed_at", "job_id", "created_at"],
             "retry_jobs": ["status", "next_retry", "job_id", "payload"],
             "user_facts": ["user_id", "category", "fact_id", "statement", "importance"],
             "conversation_recent_messages": ["conversation_id", "message_id", "content"]
