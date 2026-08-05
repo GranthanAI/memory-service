@@ -15,6 +15,7 @@ from app.db.session import initialize_db_sessions, close_db_sessions
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.milvus_repository import MilvusRepository
 from app.services.long_memory_service import LongMemoryService
+from app.core.config import settings
 
 
 def run_async(coro):
@@ -86,7 +87,7 @@ def test_long_memory_service_fact_merge_policy_integration(clean_databases):
     cassandra_repo.upsert_fact(cassandra_record)
 
     # Vector representation of "User likes drinking green tea."
-    green_tea_vector = [1.0] + [0.0] * 1535
+    green_tea_vector = [1.0] + [0.0] * (settings.VECTOR_DIMENSION - 1)
     milvus_record = {
         "fact_id": str(initial_fact_id),
         "user_id": user_id,
@@ -115,7 +116,7 @@ def test_long_memory_service_fact_merge_policy_integration(clean_databases):
 
     # 3. Test Rule 2: Low similarity -> Insert as new fact
     # Vector representing something completely different, e.g. "User plays the piano."
-    piano_vector = [0.0, 1.0] + [0.0] * 1534
+    piano_vector = [0.0, 1.0] + [0.0] * (settings.VECTOR_DIMENSION - 2)
     new_inserted_fact = {
         "statement": "User plays the piano.",
         "category": category,
@@ -135,7 +136,7 @@ def test_long_memory_service_fact_merge_policy_integration(clean_databases):
 
     # 4. Test Rule 3: High similarity, lower importance -> Ignore
     # Vector close to green tea vector
-    close_tea_vector = [0.99, 0.1] + [0.0] * 1534
+    close_tea_vector = [0.99, 0.1] + [0.0] * (settings.VECTOR_DIMENSION - 2)
     ignored_fact = {
         "statement": "User enjoys green tea.",
         "category": category,

@@ -206,7 +206,7 @@ async def test_embedding_worker_success(mock_worker_dependencies):
     }
     
     # Mock LLM return embedding
-    embedding_client.generate_embedding.return_value = [0.1] * 1536
+    embedding_client.generate_embedding.return_value = [0.1] * settings.VECTOR_DIMENSION
 
     msg = MagicMock(value=json.dumps(payload).encode("utf-8"))
     mock_consumer = mock_kafka_consumer(msg)

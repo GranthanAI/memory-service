@@ -53,8 +53,8 @@ class SystemSettings(BaseSettings):
     # ─── Milvus (Vector Index) ────────────────────────────────────────────────
     MILVUS_HOST: str = "localhost"
     MILVUS_PORT: int = 19530
-    VECTOR_DIMENSION: int = 1536
-    EMBEDDING_MODEL_NAME: str = "text-embedding-3-small"
+    VECTOR_DIMENSION: int = 384
+    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
     EMBEDDING_MODEL_VERSION: str = "v1.0.0"
     MILVUS_BULK_INSERT_BATCH_SIZE: int = 100   # Vectors per Milvus insert batch
     EMBEDDING_CLIENT_TYPE: str = "grpc"         # "grpc" | "mock"

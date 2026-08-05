@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.repositories.milvus_repository import MilvusRepository
+from app.core.config import settings
 
 
 @pytest.fixture
@@ -79,7 +80,7 @@ def test_milvus_insert_facts(mock_milvus):
             "fact_version": 1,
             "embedding_ver": "v1.0",
             "created_at": 12345.67,
-            "vector": [0.1] * 1536
+            "vector": [0.1] * settings.VECTOR_DIMENSION
         },
         {
             "fact_id": "id-2",
@@ -91,7 +92,7 @@ def test_milvus_insert_facts(mock_milvus):
             "fact_version": 2,
             "embedding_ver": "v1.0",
             "created_at": 12345.68,
-            "vector": [0.2] * 1536
+            "vector": [0.2] * settings.VECTOR_DIMENSION
         }
     ]
 
@@ -126,7 +127,7 @@ def test_milvus_search_facts(mock_milvus):
 
     repo = MilvusRepository(collection_name="test_collection")
 
-    query_vec = [0.1] * 1536
+    query_vec = [0.1] * settings.VECTOR_DIMENSION
     results = repo.search_facts(
         user_id="user-a",
         query_vector=query_vec,

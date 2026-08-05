@@ -13,7 +13,7 @@ from typing import List
 from app.core.config import settings
 from app.core.exceptions import CircuitBreakerOpenException
 from app.clients.llm_client import AsyncGRPCConnectionPool
-from app.proto import llm_pb2, llm_pb2_grpc
+from app.proto import embedding_pb2, embedding_pb2_grpc
 
 logger = logging.getLogger("memory_service.clients.embedding_client")
 
@@ -91,12 +91,11 @@ class GRPCEmbeddingClient(EmbeddingClient):
                     )
                     raise CircuitBreakerOpenException("embedding-service")
 
-        # 2. Invoke GenerateEmbedding stub
+        # 2. Invoke GenerateEmbedding stub on the Embedding Service
         async def embed_stub(channel) -> List[float]:
-            stub = llm_pb2_grpc.LLMServiceStub(channel)
-            request = llm_pb2.EmbeddingRequest(
-                text=text,
-                model_name=settings.EMBEDDING_MODEL_NAME
+            stub = embedding_pb2_grpc.EmbeddingServiceStub(channel)
+            request = embedding_pb2.EmbeddingRequest(
+                text=text
             )
             response = await stub.GenerateEmbedding(
                 request,

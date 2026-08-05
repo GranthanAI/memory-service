@@ -39,7 +39,7 @@ def test_system_settings_loading():
     assert settings.REDIS_LOCK_WATCHDOG_INTERVAL == 2.0
 
     # Milvus
-    assert settings.VECTOR_DIMENSION == 1536
+    assert settings.VECTOR_DIMENSION == 384
     assert settings.MILVUS_BULK_INSERT_BATCH_SIZE == 100
 
     # gRPC pool (new)

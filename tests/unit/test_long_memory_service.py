@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.services.long_memory_service import LongMemoryService
+from app.core.config import settings
 
 
 @pytest.fixture
@@ -51,7 +52,7 @@ async def test_merge_user_facts_skips_on_exact_match(mock_repos):
             "statement": "user likes espresso.",  # case-insensitive match
             "category": "preferences",
             "importance": 0.9,
-            "vector": [0.1] * 1536
+            "vector": [0.1] * settings.VECTOR_DIMENSION
         }
     ]
 
@@ -94,7 +95,7 @@ async def test_merge_user_facts_inserts_on_low_similarity(mock_repos):
             "statement": "User likes espresso.",
             "category": "preferences",
             "importance": 0.8,
-            "vector": [0.1] * 1536
+            "vector": [0.1] * settings.VECTOR_DIMENSION
         }
     ]
 
@@ -140,7 +141,7 @@ async def test_merge_user_facts_ignores_on_lower_importance(mock_repos):
             "statement": "User likes dark roast coffee.",
             "category": "preferences",
             "importance": 0.7,  # Lower importance
-            "vector": [0.1] * 1536
+            "vector": [0.1] * settings.VECTOR_DIMENSION
         }
     ]
 
@@ -183,7 +184,7 @@ async def test_merge_user_facts_supersedes_on_higher_importance(mock_repos):
             "statement": "User lives in a house in London.",
             "category": "preferences",
             "importance": 0.9,  # Higher importance
-            "vector": [0.1] * 1536
+            "vector": [0.1] * settings.VECTOR_DIMENSION
         }
     ]
 

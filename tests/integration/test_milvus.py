@@ -13,6 +13,7 @@ from pymilvus import utility
 
 from app.db.session import initialize_db_sessions, close_db_sessions
 from app.repositories.milvus_repository import MilvusRepository
+from app.core.config import settings
 
 
 def run_async(coro):
@@ -55,8 +56,8 @@ def test_milvus_lifecycle_integration(clean_collection):
     # 1. Prepare records for two users (user-1 and user-2)
     # Vectors are designed such that vector1 and vector1_query are identical (cosine similarity ~1.0)
     # vector2 is orthogonal (cosine similarity ~0.0)
-    vector1 = [1.0] + [0.0] * 1535
-    vector2 = [0.0, 1.0] + [0.0] * 1534
+    vector1 = [1.0] + [0.0] * (settings.VECTOR_DIMENSION - 1)
+    vector2 = [0.0, 1.0] + [0.0] * (settings.VECTOR_DIMENSION - 2)
     
     rec_user1_pref = {
         "fact_id": "fact-1",
@@ -106,7 +107,7 @@ def test_milvus_lifecycle_integration(clean_collection):
 
     # 3. Perform semantic search for user-1 (routing partition key filter)
     # Search vector matches user-1's tea preference vector
-    search_vector = [1.0] + [0.0] * 1535
+    search_vector = [1.0] + [0.0] * (settings.VECTOR_DIMENSION - 1)
     hits_user1 = repo.search_facts(
         user_id="user-1",
         query_vector=search_vector,
@@ -159,7 +160,7 @@ def test_milvus_lifecycle_integration(clean_collection):
     # Ensure user-2's facts are unaffected
     hits_user2 = repo.search_facts(
         user_id="user-2",
-        query_vector=[0.0, 1.0] + [0.0] * 1534,
+        query_vector=[0.0, 1.0] + [0.0] * (settings.VECTOR_DIMENSION - 2),
         limit=5,
         consistency_level="Strong"
     )

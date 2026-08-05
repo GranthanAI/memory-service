@@ -53,7 +53,7 @@ async def test_context_builder_success(mock_retrieval_service, mock_graph_client
     context = await builder.build_context(
         user_id="user-123",
         conversation_id="conv-current",
-        query_vector=[0.1] * 1536
+        query_vector=[0.1] * settings.VECTOR_DIMENSION
     )
 
     assert context["conversation_id"] == "conv-current"
@@ -85,7 +85,7 @@ async def test_context_builder_graph_timeout_fallback(mock_retrieval_service, mo
         context = await builder.build_context(
             user_id="user-123",
             conversation_id="conv-current",
-            query_vector=[0.1] * 1536
+            query_vector=[0.1] * settings.VECTOR_DIMENSION
         )
 
     # Parent summaries must be empty, but rest of context is present
@@ -104,7 +104,7 @@ async def test_context_builder_graph_exception_fallback(mock_retrieval_service, 
     context = await builder.build_context(
         user_id="user-123",
         conversation_id="conv-current",
-        query_vector=[0.1] * 1536
+        query_vector=[0.1] * settings.VECTOR_DIMENSION
     )
 
     assert context["current_summary"] == "Current context summary"

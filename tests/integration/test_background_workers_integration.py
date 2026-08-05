@@ -127,7 +127,7 @@ async def test_end_to_end_worker_pipeline_integration(clean_pipeline_tables):
     # Define LLM client call responses
     summary_text = "Integrated summary of user conversation"
     extracted_facts = ["preferences:0.9:Likes black coffee", "habits:0.8:Wakes up at 6am"]
-    embedding_vector = [0.15] * 1536
+    embedding_vector = [0.15] * settings.VECTOR_DIMENSION
 
     async def cb_side_effect(stub_fn, *args, **kwargs):
         # Inspect stub_fn source or stub name to return correct mock response
