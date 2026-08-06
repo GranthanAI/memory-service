@@ -100,6 +100,15 @@ class SystemSettings(BaseSettings):
     RETRIEVAL_TOP_K_FACTS: int = 10            # Max facts to retrieve from Milvus per query
     FACT_MERGE_SIMILARITY_THRESHOLD: float = 0.85   # Above this → supersede, below → insert new
 
+    # ─── Internal LLM Engine ──────────────────────────────────────────────────
+    LLM_PROVIDER: str = "groq"
+    GROQ_API_KEY: str = ""
+    LLM_MODEL: str = "llama-3.3-70b-versatile"
+    LLM_TIMEOUT_SECONDS: float = 60.0
+    LLM_MAX_RETRIES: int = 3
+    LLM_TEMPERATURE: float = 0.2
+    LLM_MAX_TOKENS: int = 1024
+
 
 # Singleton — import this everywhere
 settings = SystemSettings()

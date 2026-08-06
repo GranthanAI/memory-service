@@ -26,6 +26,8 @@ from app.services.long_memory_service import LongMemoryService
 from app.services.ranking_service import RankingService
 from app.services.retrieval_service import RetrievalService
 from app.services.context_builder import ContextBuilder
+from app.factories.llm_factory import LLMFactory
+from app.managers.llm_manager import LLMManager
 
 logger = logging.getLogger("memory_service.core.container")
 
@@ -45,6 +47,7 @@ class Container:
         self.llm_client: Optional[LLMClient] = None
         self.graph_client: Optional[GraphClient] = None
         self.embedding_client: Optional[EmbeddingClient] = None
+        self.llm_manager: Optional[LLMManager] = None
 
         # Repositories
         self.cassandra_repo: Optional[CassandraRepository] = None
@@ -94,6 +97,10 @@ class Container:
                 pool_size=settings.GRPC_POOL_SIZE
             )
         await self.embedding_client.connect()
+
+        # Internal LLM module
+        self.llm_provider = LLMFactory.create_provider()
+        self.llm_manager = LLMManager(self.llm_provider)
 
         # 3. Setup Repositories
         self.cassandra_repo = CassandraRepository(self.cassandra_session)

@@ -141,6 +141,25 @@ async def validate_startup_dependencies(container: Container) -> None:
         else:
             logger.warning(f"⚠️ {msg} (Non-strict mode: ignoring)")
 
+    # ── 7. Internal LLM Manager Validation ─────────────────────────────────
+    if container.llm_manager:
+        llm_engine_healthy = False
+        try:
+            logger.info(f"Verifying internal LLM provider ({settings.LLM_PROVIDER}) health check...")
+            # Run simple ping health check
+            healthy = await container.llm_manager.check_health()
+            if not healthy:
+                raise RuntimeError("Internal LLM provider health check returned False")
+            logger.info("✓ Internal LLM provider is healthy.")
+            llm_engine_healthy = True
+        except Exception as e:
+            msg = f"Internal LLM provider health check FAILED: {e}"
+            if settings.STRICT_STARTUP_VALIDATION:
+                logger.critical(f"✗ {msg}")
+                errors.append(f"LLMEngine: {e}")
+            else:
+                logger.warning(f"⚠️ {msg} (Non-strict mode: ignoring)")
+
     # ── Resolve Errors ────────────────────────────────────────────────────────
     if errors:
         logger.critical(f"Startup validation FAILED with {len(errors)} error(s). Shutting down.")
