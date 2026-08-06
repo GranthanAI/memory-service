@@ -26,6 +26,7 @@ from app.services.long_memory_service import LongMemoryService
 from app.services.ranking_service import RankingService
 from app.services.retrieval_service import RetrievalService
 from app.services.context_builder import ContextBuilder
+from app.services.llm_service import LLMService
 from app.factories.llm_factory import LLMFactory
 from app.managers.llm_manager import LLMManager
 
@@ -63,6 +64,7 @@ class Container:
         self.ranking_service: Optional[RankingService] = None
         self.retrieval_service: Optional[RetrievalService] = None
         self.context_builder: Optional[ContextBuilder] = None
+        self.llm_service: Optional[LLMService] = None
 
     async def init_resources(self) -> None:
         """
@@ -114,6 +116,7 @@ class Container:
         self.summary_service = SummaryService(self.memory_repo, self.cassandra_repo, self.llm_client)
         self.long_memory_service = LongMemoryService(self.cassandra_repo, self.milvus_repo)
         self.ranking_service = RankingService()
+        self.llm_service = LLMService(self.llm_manager)
 
         # 5. Setup Retrieval & Context services
         self.retrieval_service = RetrievalService(

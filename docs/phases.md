@@ -393,3 +393,98 @@ This implementation plan outlines the 20 coding phases for building the **GraphG
   * Compact message windows and delete orphaned vector representations.
 
 
+# Changes 1
+
+I would split the implementation into **5 production-friendly phases**.
+
+---
+
+# Phase 1: LLM Foundation
+
+**Objective:** Build the reusable LLM infrastructure.
+
+### Tasks
+
+* Configuration (`GROQ_API_KEY`, model, timeout, retries)
+* `GroqClient`
+* `BaseLLMProvider`
+* `GroqProvider`
+* `LLMFactory`
+* `LLMManager` (Singleton)
+* Dependency Injection registration
+* Health checks
+* Startup model/provider validation
+
+---
+
+# Phase 2: LLM Business Layer
+
+**Objective:** Build the business logic for memory intelligence.
+
+### Tasks
+
+* Prompt Builder
+
+  * Summary Prompt
+  * Fact Extraction Prompt
+* `LLMService`
+* Request/Response schemas
+* Response parsing
+* Retry & timeout handling
+* Structured logging
+* Circuit breaker integration
+
+---
+
+# Phase 3: APIs
+
+**Objective:** Expose the LLM Engine.
+
+### Tasks
+
+* HTTP Endpoints
+
+  * `POST /internal/llm/summarize`
+  * `POST /internal/llm/facts`
+* gRPC
+
+  * Proto definitions
+  * Server
+  * Handlers
+* API validation
+* Swagger support
+
+---
+
+# Phase 4: Memory Pipeline Integration
+
+**Objective:** Integrate with existing Memory Service pipeline.
+
+### Tasks
+
+* Update `SummaryService`
+* Update `LongMemoryService`
+* Update `SummaryWorker`
+* Update `FactWorker`
+* Remove old `llm_client` dependency
+* Wire DI container
+* Keep Kafka pipeline unchanged
+
+---
+
+# Phase 5: Production Hardening
+
+**Objective:** Make the LLM engine production-ready.
+
+### Tasks
+
+* Metrics
+* Request tracing
+* Connection pooling
+* Rate limiting
+* Retry policies
+* Circuit breaker validation
+* Load testing
+* Failure recovery
+* Documentation (HLD/LLD updates)
+* Unit & integration tests
