@@ -10,11 +10,13 @@ Route map:
   GET  /metrics                   — Prometheus metrics endpoint
 """
 
-from fastapi import FastAPI
+import uuid
+from fastapi import FastAPI, Request
 from prometheus_client import make_asgi_app
 
 from app.api.routers import api_router
 from app.lifespan import lifespan
+from app.core.logging import set_log_context, clear_log_context
 
 app = FastAPI(
     title="GraphGPT Memory Service",
@@ -28,6 +30,22 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# ── HTTP Tracing Middleware ───────────────────────────────────────────────────
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    trace_id = request.headers.get("X-Trace-ID") or request.headers.get("X-Request-ID")
+    if not trace_id:
+        trace_id = str(uuid.uuid4())
+        
+    set_log_context(trace_id=trace_id)
+    try:
+        response = await call_next(request)
+        response.headers["X-Trace-ID"] = trace_id
+        return response
+    finally:
+        clear_log_context()
+
 
 # ── Internal API routes ───────────────────────────────────────────────────────
 app.include_router(api_router)

@@ -7,11 +7,13 @@ Delegates calls to LLMService facade.
 
 import logging
 
+import uuid
 import grpc
 
 from app.proto import llm_pb2, llm_pb2_grpc
 from app.schemas.llm import LLMMessage, FactExtractRequest, SummarizeRequest
 from app.services.llm_service import LLMService
+from app.core.logging import set_log_context, clear_log_context
 
 logger = logging.getLogger("memory_service.proto.handlers")
 
@@ -26,6 +28,15 @@ class LLMServiceHandler(llm_pb2_grpc.LLMServiceServicer):
         self.llm_service = llm_service
 
     async def Summarize(self, request, context):
+        trace_id = None
+        for key, val in (context.invocation_metadata() or []):
+            if key.lower() in ("x-trace-id", "x-request-id"):
+                trace_id = val
+                break
+        if not trace_id:
+            trace_id = str(uuid.uuid4())
+
+        set_log_context(trace_id=trace_id)
         try:
             logger.info("gRPC Summarize request received.")
 
@@ -49,8 +60,19 @@ class LLMServiceHandler(llm_pb2_grpc.LLMServiceServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             raise e
+        finally:
+            clear_log_context()
 
     async def ExtractFacts(self, request, context):
+        trace_id = None
+        for key, val in (context.invocation_metadata() or []):
+            if key.lower() in ("x-trace-id", "x-request-id"):
+                trace_id = val
+                break
+        if not trace_id:
+            trace_id = str(uuid.uuid4())
+
+        set_log_context(trace_id=trace_id)
         try:
             logger.info("gRPC ExtractFacts request received.")
 
@@ -76,3 +98,5 @@ class LLMServiceHandler(llm_pb2_grpc.LLMServiceServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             raise e
+        finally:
+            clear_log_context()

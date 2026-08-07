@@ -25,8 +25,23 @@ class GroqClient:
     def connect(self) -> None:
         """Initializes the underlying AsyncGroq SDK client."""
         if not self.client:
-            self.client = AsyncGroq(api_key=self.api_key, timeout=self.timeout)
-            logger.info("GroqClient initialized successfully.")
+            import httpx
+            from app.core.config import settings
+            
+            limits = httpx.Limits(
+                max_connections=settings.LLM_POOL_MAX_CONNECTIONS,
+                max_keepalive_connections=settings.LLM_POOL_MAX_KEEPALIVE_CONNECTIONS,
+            )
+            http_client = httpx.AsyncClient(limits=limits, timeout=self.timeout)
+            self.client = AsyncGroq(
+                api_key=self.api_key,
+                timeout=self.timeout,
+                http_client=http_client
+            )
+            logger.info(
+                f"GroqClient initialized successfully with custom connection pooling: "
+                f"max={settings.LLM_POOL_MAX_CONNECTIONS}, keepalive={settings.LLM_POOL_MAX_KEEPALIVE_CONNECTIONS}."
+            )
 
     async def chat_completion(
         self,

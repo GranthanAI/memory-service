@@ -8,8 +8,11 @@ prompt building, token limits, and output parsing.
 import json
 import logging
 import re
+import time
 from typing import List
 
+from app.core.config import settings
+from app.core.metrics import LLM_LATENCY, LLM_REQUESTS, LLM_TOKENS
 from app.managers.llm_manager import LLMManager
 from app.prompts.fact_prompt import FACT_SYSTEM_PROMPT, FACT_USER_PROMPT_TEMPLATE
 from app.prompts.summary_prompt import (
@@ -64,9 +67,28 @@ class LLMService:
         ]
 
         logger.info("Executing conversation summarization through LLMManager...")
-        summary_raw = await self.llm_manager.generate_with_retry(messages)
-        summary_clean = summary_raw.strip()
+        start_time = time.monotonic()
+        try:
+            summary_raw = await self.llm_manager.generate_with_retry(messages)
+            latency = time.monotonic() - start_time
+            
+            # Record metrics
+            LLM_LATENCY.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="summarize").observe(latency)
+            LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="summarize", status="success").inc()
+            
+            prompt_tokens_est = sum(len(msg["content"]) for msg in messages) // 4
+            completion_tokens_est = len(summary_raw) // 4
+            LLM_TOKENS.labels(type="prompt").inc(prompt_tokens_est)
+            LLM_TOKENS.labels(type="completion").inc(completion_tokens_est)
+            
+            logger.info(f"Summarization succeeded. Latency: {latency:.3f}s. Est prompt tokens: {prompt_tokens_est}, completion tokens: {completion_tokens_est}")
+        except Exception as e:
+            latency = time.monotonic() - start_time
+            LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="summarize", status="failure").inc()
+            logger.error(f"Summarization failed. Latency: {latency:.3f}s. Error: {e}")
+            raise e
 
+        summary_clean = summary_raw.strip()
         return SummarizeResponse(summary=summary_clean)
 
     async def extract_facts(self, request: FactExtractRequest) -> FactExtractResponse:
@@ -81,7 +103,26 @@ class LLMService:
         ]
 
         logger.info("Executing fact extraction through LLMManager...")
-        raw_output = await self.llm_manager.generate_with_retry(messages)
+        start_time = time.monotonic()
+        try:
+            raw_output = await self.llm_manager.generate_with_retry(messages)
+            latency = time.monotonic() - start_time
+            
+            # Record metrics
+            LLM_LATENCY.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="extract_facts").observe(latency)
+            LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="extract_facts", status="success").inc()
+            
+            prompt_tokens_est = sum(len(msg["content"]) for msg in messages) // 4
+            completion_tokens_est = len(raw_output) // 4
+            LLM_TOKENS.labels(type="prompt").inc(prompt_tokens_est)
+            LLM_TOKENS.labels(type="completion").inc(completion_tokens_est)
+            
+            logger.info(f"Fact extraction succeeded. Latency: {latency:.3f}s. Est prompt tokens: {prompt_tokens_est}, completion tokens: {completion_tokens_est}")
+        except Exception as e:
+            latency = time.monotonic() - start_time
+            LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="extract_facts", status="failure").inc()
+            logger.error(f"Fact extraction failed. Latency: {latency:.3f}s. Error: {e}")
+            raise e
 
         # Parse facts
         parsed_facts = self._parse_facts(raw_output)

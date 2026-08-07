@@ -308,6 +308,9 @@ FAILED  ──► DLQ + Cassandra retry_jobs row (status=FAILED)
 | `memory.outbox.pending.total` | Gauge | Outbox table pending jobs count |
 | `memory.retry.pending.total` | Gauge | Retry table pending jobs count |
 | `memory.grpc.channel.errors` | Counter | gRPC channel-level errors |
+| `memory_llm_requests_total` | Counter | LLM generation requests count by provider, model, action, status |
+| `memory_llm_latency_seconds` | Histogram | LLM call latency duration by provider, model, action |
+| `memory_llm_tokens_total` | Counter | LLM tokens consumed (prompt and completion tokens) |
 
 ---
 
@@ -320,7 +323,7 @@ FAILED  ──► DLQ + Cassandra retry_jobs row (status=FAILED)
 | Cache | Redis | 7.2 | Hot cache only |
 | Vector Database | Milvus | 2.3 | Vector indexing, HNSW |
 | Message Broker | Apache Kafka | 3.9 | Async worker dispatch |
-| AI Inference | gRPC async pool | v1.65+ | LLM + Embedding calls |
+| AI Inference | Internal LLM Engine / Groq | — | Async LLM completions, rate-limited, pooled, traced |
 | Graph Database | Neo4j | 5.15 | Lineage (via Graph Service) |
 | Metrics | Prometheus + Grafana | — | Observability |
 | Deployment | Docker + Kubernetes | — | Container runtime |

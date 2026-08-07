@@ -1183,5 +1183,33 @@ async def get_parent_summaries(self, conversation_id: str) -> list[dict]:
 
 The context response still returns the current summary and recent messages. Parent summaries are omitted with a `parent_summaries_available: false` flag in the response metadata.
 
+## 20. Production Hardened Internal LLM Engine
+
+We have hardened the internal LLM Engine to support high-throughput, battle-tested production operations with the following design details:
+
+### 20.1 Connection Pooling
+- Built on top of `AsyncGroq` using a shared, pre-configured `httpx.AsyncClient` session.
+- Configured connection limits via `httpx.Limits`:
+  - `LLM_POOL_MAX_CONNECTIONS`: Defaults to `50` concurrent connections.
+  - `LLM_POOL_MAX_KEEPALIVE_CONNECTIONS`: Defaults to `10` idle connections.
+- Retains connection reusability across all generation and health-check requests, drastically reducing TCP handshake overhead.
+
+### 20.2 Rate Limiting / Concurrency Limiter
+- Implemented client-side concurrency throttling inside `LLMManager` using `asyncio.Semaphore`.
+- Enforces `LLM_MAX_CONCURRENT_REQUESTS` (default `10`).
+- Prevents upstream rate limits (429 Too Many Requests) and resource exhaustion by throttling high-concurrency spikes locally without thread blockage.
+
+### 20.3 Request Tracing
+- Integrates with the async-safe structured log context via `ContextVar`.
+- HTTP endpoints trace requests using a middleware that checks/generates `X-Trace-ID` and injects it into logging outputs.
+- Inbound gRPC requests capture trace keys from gRPC invocation metadata.
+- Background asynchronous workers (`SummaryWorker`, `FactWorker`) inject active `conversation_id`, `version`, and `trace_id` headers into thread logging scopes.
+
+### 20.4 Observability & Metrics
+Exposes three central Prometheus metrics:
+* `memory_llm_requests_total`: Counter for total generation calls, labeled by `provider`, `model`, `action`, and completion `status`.
+* `memory_llm_latency_seconds`: Histogram measuring execution duration.
+* `memory_llm_tokens_total`: Counter tracking estimated prompt and completion tokens.
+
 ---
-**End of Low-Level Design — v3.1 (Production-Grade)**
+**End of Low-Level Design — v4.0 (Production-Hardened)**

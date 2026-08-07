@@ -81,3 +81,24 @@ GRPC_ERRORS = Counter(
     "memory_grpc_channel_errors_total",
     "Total gRPC channel-level errors (circuit breaker trips, TRANSIENT_FAILURE, timeouts)",
 )
+
+# ─── LLM Metrics ──────────────────────────────────────────────────────────────
+
+LLM_REQUESTS = Counter(
+    "memory_llm_requests_total",
+    "Total LLM generation requests, labeled by provider, model, action, and status",
+    ["provider", "model", "action", "status"],
+)
+
+LLM_LATENCY = Histogram(
+    "memory_llm_latency_seconds",
+    "LLM call completion latency",
+    ["provider", "model", "action"],
+    buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)
+
+LLM_TOKENS = Counter(
+    "memory_llm_tokens_total",
+    "Total tokens consumed by LLM operations, labeled by type (prompt, completion)",
+    ["type"],
+)

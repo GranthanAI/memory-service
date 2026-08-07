@@ -109,6 +109,9 @@ class SystemSettings(BaseSettings):
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 1024
     LLM_GRPC_PORT: int = 50052
+    LLM_POOL_MAX_CONNECTIONS: int = 50
+    LLM_POOL_MAX_KEEPALIVE_CONNECTIONS: int = 10
+    LLM_MAX_CONCURRENT_REQUESTS: int = 10
 
 
 # Singleton — import this everywhere

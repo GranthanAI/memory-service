@@ -18,6 +18,7 @@ from app.services.llm_service import LLMService
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.memory_repository import MemoryRepository
 from app.services.memory_service import MemoryService
+from app.core.logging import set_log_context, clear_log_context
 
 logger = logging.getLogger("memory_service.workers.fact_worker")
 
@@ -85,6 +86,13 @@ class FactWorker:
                             conversation_id = payload["conversation_id"]
                             user_id = payload.get("user_id", "unknown_user")
                             version = payload.get("version", 0)
+                            trace_id = payload.get("trace_id") or str(uuid.uuid4())
+
+                            set_log_context(
+                                trace_id=trace_id,
+                                conversation_id=conversation_id,
+                                summary_version=version
+                            )
 
                             logger.info(f"Processing fact extraction request for conversation: {conversation_id}")
 
@@ -154,6 +162,8 @@ class FactWorker:
                                     error_msg=str(e),
                                     attempt_count=payload.get("attempt_count", 0)
                                 )
+                        finally:
+                            clear_log_context()
 
                     # Commit partition batch offsets
                     await self._consumer.commit()
