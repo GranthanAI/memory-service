@@ -15,6 +15,7 @@ from typing import AsyncGenerator
 from fastapi import Request
 
 from app.services.context_builder import ContextBuilder
+from app.services.llm_service import LLMService
 from app.clients.llm_client import AsyncGRPCConnectionPool
 from app.db.cassandra import get_session
 from app.db.redis import get_redis_client
@@ -62,3 +63,12 @@ async def get_redis_health_client(request: Request):
     Uses the global client singleton initialized during startup.
     """
     return get_redis_client()
+
+
+def get_llm_service(request: Request) -> LLMService:
+    """
+    Provides the LLMService singleton for summarization and fact extraction endpoints.
+    """
+    container = get_container(request)
+    return container.llm_service
+

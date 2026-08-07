@@ -27,6 +27,7 @@ from app.services.ranking_service import RankingService
 from app.services.retrieval_service import RetrievalService
 from app.services.context_builder import ContextBuilder
 from app.services.llm_service import LLMService
+from app.proto.server import GRPCServer
 from app.factories.llm_factory import LLMFactory
 from app.managers.llm_manager import LLMManager
 
@@ -65,6 +66,7 @@ class Container:
         self.retrieval_service: Optional[RetrievalService] = None
         self.context_builder: Optional[ContextBuilder] = None
         self.llm_service: Optional[LLMService] = None
+        self.grpc_server: Optional[GRPCServer] = None
 
     async def init_resources(self) -> None:
         """
@@ -118,6 +120,10 @@ class Container:
         self.ranking_service = RankingService()
         self.llm_service = LLMService(self.llm_manager)
 
+        # Wire internal LLM gRPC server
+        self.grpc_server = GRPCServer(settings.LLM_GRPC_PORT, self.llm_service)
+        await self.grpc_server.start()
+
         # 5. Setup Retrieval & Context services
         self.retrieval_service = RetrievalService(
             memory_repo=self.memory_repo,
@@ -133,6 +139,12 @@ class Container:
     async def shutdown_resources(self) -> None:
         """Gracefully tears down clients and active connection pools."""
         logger.info("Tearing down container clients...")
+        if self.grpc_server:
+            try:
+                await self.grpc_server.stop()
+                logger.info("✓ internal LLM gRPC server stopped.")
+            except Exception as e:
+                logger.error(f"Error stopping internal LLM gRPC server: {e}")
         if self.llm_pool:
             try:
                 await self.llm_pool.close()

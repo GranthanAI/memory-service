@@ -24,25 +24,25 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13\x61pp/proto/llm.proto\x12\x03llm\"[\n\x0eSummaryRequest\x12\x18\n\x10previous_summary\x18\x01 \x01(\t\x12\x19\n\x11new_messages_json\x18\x02 \x01(\t\x12\x14\n\x0cinstructions\x18\x03 \x01(\t\"\'\n\x0fSummaryResponse\x12\x14\n\x0csummary_text\x18\x01 \x01(\t\"Y\n\x0c\x46\x61\x63tsRequest\x12\x18\n\x10previous_summary\x18\x01 \x01(\t\x12\x19\n\x11new_messages_json\x18\x02 \x01(\t\x12\x14\n\x0cinstructions\x18\x03 \x01(\t\"\x1e\n\rFactsResponse\x12\r\n\x05\x66\x61\x63ts\x18\x01 \x03(\t\"4\n\x10\x45mbeddingRequest\x12\x0c\n\x04text\x18\x01 \x01(\t\x12\x12\n\nmodel_name\x18\x02 \x01(\t\"&\n\x11\x45mbeddingResponse\x12\x11\n\tembedding\x18\x01 \x03(\x02\x32\xc5\x01\n\nLLMService\x12<\n\x0fGenerateSummary\x12\x13.llm.SummaryRequest\x1a\x14.llm.SummaryResponse\x12\x35\n\x0c\x45xtractFacts\x12\x11.llm.FactsRequest\x1a\x12.llm.FactsResponse\x12\x42\n\x11GenerateEmbedding\x12\x15.llm.EmbeddingRequest\x1a\x16.llm.EmbeddingResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13\x61pp/proto/llm.proto\x12\x03llm\"+\n\nLLMMessage\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"Q\n\x0eSummaryRequest\x12\x18\n\x10previous_summary\x18\x01 \x01(\t\x12%\n\x0cnew_messages\x18\x02 \x03(\x0b\x32\x0f.llm.LLMMessage\"\"\n\x0fSummaryResponse\x12\x0f\n\x07summary\x18\x01 \x01(\t\"\x1e\n\x0b\x46\x61\x63tRequest\x12\x0f\n\x07summary\x18\x01 \x01(\t\"1\n\x0c\x46\x61\x63tResponse\x12!\n\x05\x66\x61\x63ts\x18\x01 \x03(\x0b\x32\x12.llm.ExtractedFact\"H\n\rExtractedFact\x12\x10\n\x08\x63\x61tegory\x18\x01 \x01(\t\x12\x12\n\nimportance\x18\x02 \x01(\x02\x12\x11\n\tstatement\x18\x03 \x01(\t2y\n\nLLMService\x12\x36\n\tSummarize\x12\x13.llm.SummaryRequest\x1a\x14.llm.SummaryResponse\x12\x33\n\x0c\x45xtractFacts\x12\x10.llm.FactRequest\x1a\x11.llm.FactResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'app.proto.llm_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_SUMMARYREQUEST']._serialized_start=28
-  _globals['_SUMMARYREQUEST']._serialized_end=119
-  _globals['_SUMMARYRESPONSE']._serialized_start=121
-  _globals['_SUMMARYRESPONSE']._serialized_end=160
-  _globals['_FACTSREQUEST']._serialized_start=162
-  _globals['_FACTSREQUEST']._serialized_end=251
-  _globals['_FACTSRESPONSE']._serialized_start=253
-  _globals['_FACTSRESPONSE']._serialized_end=283
-  _globals['_EMBEDDINGREQUEST']._serialized_start=285
-  _globals['_EMBEDDINGREQUEST']._serialized_end=337
-  _globals['_EMBEDDINGRESPONSE']._serialized_start=339
-  _globals['_EMBEDDINGRESPONSE']._serialized_end=377
-  _globals['_LLMSERVICE']._serialized_start=380
-  _globals['_LLMSERVICE']._serialized_end=577
+  _globals['_LLMMESSAGE']._serialized_start=28
+  _globals['_LLMMESSAGE']._serialized_end=71
+  _globals['_SUMMARYREQUEST']._serialized_start=73
+  _globals['_SUMMARYREQUEST']._serialized_end=154
+  _globals['_SUMMARYRESPONSE']._serialized_start=156
+  _globals['_SUMMARYRESPONSE']._serialized_end=190
+  _globals['_FACTREQUEST']._serialized_start=192
+  _globals['_FACTREQUEST']._serialized_end=222
+  _globals['_FACTRESPONSE']._serialized_start=224
+  _globals['_FACTRESPONSE']._serialized_end=273
+  _globals['_EXTRACTEDFACT']._serialized_start=275
+  _globals['_EXTRACTEDFACT']._serialized_end=347
+  _globals['_LLMSERVICE']._serialized_start=349
+  _globals['_LLMSERVICE']._serialized_end=470
 # @@protoc_insertion_point(module_scope)

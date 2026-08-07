@@ -30,10 +30,7 @@ class MockLLMProvider(BaseLLMProvider):
 
         # Check if the user is asking to extract facts or summarize
         if "facts" in user_content.lower() or "extract" in user_content.lower():
-            # Return list of facts inside JSON/text
-            return json.dumps(
-                ["preferences:0.9:Likes coding", "habits:0.8:Wakes up early"]
-            )
+            return "preferences:0.9:Likes coding\nhabits:0.8:Wakes up early"
 
         return f"Mock summary generated for: {user_content[:30]}..."
 

@@ -34,27 +34,22 @@ class LLMServiceStub:
         Args:
             channel: A grpc.Channel.
         """
-        self.GenerateSummary = channel.unary_unary(
-                '/llm.LLMService/GenerateSummary',
+        self.Summarize = channel.unary_unary(
+                '/llm.LLMService/Summarize',
                 request_serializer=app_dot_proto_dot_llm__pb2.SummaryRequest.SerializeToString,
                 response_deserializer=app_dot_proto_dot_llm__pb2.SummaryResponse.FromString,
                 _registered_method=True)
         self.ExtractFacts = channel.unary_unary(
                 '/llm.LLMService/ExtractFacts',
-                request_serializer=app_dot_proto_dot_llm__pb2.FactsRequest.SerializeToString,
-                response_deserializer=app_dot_proto_dot_llm__pb2.FactsResponse.FromString,
-                _registered_method=True)
-        self.GenerateEmbedding = channel.unary_unary(
-                '/llm.LLMService/GenerateEmbedding',
-                request_serializer=app_dot_proto_dot_llm__pb2.EmbeddingRequest.SerializeToString,
-                response_deserializer=app_dot_proto_dot_llm__pb2.EmbeddingResponse.FromString,
+                request_serializer=app_dot_proto_dot_llm__pb2.FactRequest.SerializeToString,
+                response_deserializer=app_dot_proto_dot_llm__pb2.FactResponse.FromString,
                 _registered_method=True)
 
 
 class LLMServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
-    def GenerateSummary(self, request, context):
+    def Summarize(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -66,29 +61,18 @@ class LLMServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GenerateEmbedding(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
 
 def add_LLMServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'GenerateSummary': grpc.unary_unary_rpc_method_handler(
-                    servicer.GenerateSummary,
+            'Summarize': grpc.unary_unary_rpc_method_handler(
+                    servicer.Summarize,
                     request_deserializer=app_dot_proto_dot_llm__pb2.SummaryRequest.FromString,
                     response_serializer=app_dot_proto_dot_llm__pb2.SummaryResponse.SerializeToString,
             ),
             'ExtractFacts': grpc.unary_unary_rpc_method_handler(
                     servicer.ExtractFacts,
-                    request_deserializer=app_dot_proto_dot_llm__pb2.FactsRequest.FromString,
-                    response_serializer=app_dot_proto_dot_llm__pb2.FactsResponse.SerializeToString,
-            ),
-            'GenerateEmbedding': grpc.unary_unary_rpc_method_handler(
-                    servicer.GenerateEmbedding,
-                    request_deserializer=app_dot_proto_dot_llm__pb2.EmbeddingRequest.FromString,
-                    response_serializer=app_dot_proto_dot_llm__pb2.EmbeddingResponse.SerializeToString,
+                    request_deserializer=app_dot_proto_dot_llm__pb2.FactRequest.FromString,
+                    response_serializer=app_dot_proto_dot_llm__pb2.FactResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -102,7 +86,7 @@ class LLMService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def GenerateSummary(request,
+    def Summarize(request,
             target,
             options=(),
             channel_credentials=None,
@@ -115,7 +99,7 @@ class LLMService:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/llm.LLMService/GenerateSummary',
+            '/llm.LLMService/Summarize',
             app_dot_proto_dot_llm__pb2.SummaryRequest.SerializeToString,
             app_dot_proto_dot_llm__pb2.SummaryResponse.FromString,
             options,
@@ -143,35 +127,8 @@ class LLMService:
             request,
             target,
             '/llm.LLMService/ExtractFacts',
-            app_dot_proto_dot_llm__pb2.FactsRequest.SerializeToString,
-            app_dot_proto_dot_llm__pb2.FactsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GenerateEmbedding(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/llm.LLMService/GenerateEmbedding',
-            app_dot_proto_dot_llm__pb2.EmbeddingRequest.SerializeToString,
-            app_dot_proto_dot_llm__pb2.EmbeddingResponse.FromString,
+            app_dot_proto_dot_llm__pb2.FactRequest.SerializeToString,
+            app_dot_proto_dot_llm__pb2.FactResponse.FromString,
             options,
             channel_credentials,
             insecure,

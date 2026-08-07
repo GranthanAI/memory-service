@@ -108,6 +108,7 @@ class SystemSettings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 1024
+    LLM_GRPC_PORT: int = 50052
 
 
 # Singleton — import this everywhere

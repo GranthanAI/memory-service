@@ -3,36 +3,34 @@ syntax = "proto3";
 package llm;
 
 service LLMService {
-  rpc GenerateSummary (SummaryRequest) returns (SummaryResponse);
-  rpc ExtractFacts (FactsRequest) returns (FactsResponse);
-  rpc GenerateEmbedding (EmbeddingRequest) returns (EmbeddingResponse);
+    rpc Summarize(SummaryRequest) returns (SummaryResponse);
+    rpc ExtractFacts(FactRequest) returns (FactResponse);
+}
+
+message LLMMessage {
+    string role = 1;
+    string content = 2;
 }
 
 message SummaryRequest {
-  string previous_summary = 1;
-  string new_messages_json = 2;
-  string instructions = 3;
+    string previous_summary = 1;
+    repeated LLMMessage new_messages = 2;
 }
 
 message SummaryResponse {
-  string summary_text = 1;
+    string summary = 1;
 }
 
-message FactsRequest {
-  string previous_summary = 1;
-  string new_messages_json = 2;
-  string instructions = 3;
+message FactRequest {
+    string summary = 1;
 }
 
-message FactsResponse {
-  repeated string facts = 1;
+message ExtractedFact {
+    string category = 1;
+    float importance = 2;
+    string statement = 3;
 }
 
-message EmbeddingRequest {
-  string text = 1;
-  string model_name = 2;
-}
-
-message EmbeddingResponse {
-  repeated float embedding = 1;
+message FactResponse {
+    repeated ExtractedFact facts = 1;
 }

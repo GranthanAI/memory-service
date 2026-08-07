@@ -13,7 +13,7 @@ Route map:
 
 from fastapi import APIRouter
 
-from app.api.internal import health, memory
+from app.api.internal import health, memory, llm
 
 # Top-level internal router — all routes are service-internal (not public)
 api_router = APIRouter(prefix="/internal")
@@ -30,4 +30,11 @@ api_router.include_router(
     health.router,
     prefix="/health",
     tags=["Observability"],
+)
+
+# LLM Engine summarization and fact extraction
+api_router.include_router(
+    llm.router,
+    prefix="/llm",
+    tags=["LLM Engine"],
 )
