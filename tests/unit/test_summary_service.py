@@ -1,28 +1,27 @@
 """
 tests/unit/test_summary_service.py
 
-Unit tests for Phase 13 Incremental Summarization Service.
-Mocks repository layers and gRPC LLM clients to assert correct linear prompt construction,
+Unit tests for Incremental Summarization Service.
+Mocks repository layers and internal LLM service to assert correct linear prompt construction,
 chronological message sorting, and cache eviction patterns.
 """
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from datetime import datetime, timezone
 
 from app.models.memory import MemoryState
 from app.services.summary_service import SummaryService
-from app.proto import llm_pb2
+from app.schemas.llm import SummarizeResponse
 
 
 @pytest.fixture
 def mock_dependencies():
-    """Mocks memory_repo, cassandra_repo, and llm_client dependencies."""
+    """Mocks memory_repo, cassandra_repo, and llm_service dependencies."""
     memory_repo = MagicMock()
     cassandra_repo = MagicMock()
-    llm_client = MagicMock()
+    llm_service = MagicMock()
 
     memory_repo.get_snapshot = AsyncMock(return_value=None)
     memory_repo.get_summary = AsyncMock(return_value=None)
@@ -31,17 +30,16 @@ def mock_dependencies():
     memory_repo.invalidate_conversation = AsyncMock()
 
     cassandra_repo.upsert_summary = MagicMock()
+    llm_service.summarize = AsyncMock()
 
-    llm_client.call_with_circuit_breaker = AsyncMock()
-
-    return memory_repo, cassandra_repo, llm_client
+    return memory_repo, cassandra_repo, llm_service
 
 
 @pytest.mark.asyncio
 async def test_summary_service_raises_on_missing_snapshot(mock_dependencies):
     """Asserts that process_incremental_summary raises ValueError if snapshot doesn't exist."""
-    memory_repo, cassandra_repo, llm_client = mock_dependencies
-    service = SummaryService(memory_repo, cassandra_repo, llm_client)
+    memory_repo, cassandra_repo, llm_service = mock_dependencies
+    service = SummaryService(memory_repo, cassandra_repo, llm_service)
 
     # Snapshot is missing (None)
     memory_repo.get_snapshot.return_value = None
@@ -53,8 +51,8 @@ async def test_summary_service_raises_on_missing_snapshot(mock_dependencies):
 @pytest.mark.asyncio
 async def test_summary_service_skips_on_no_messages(mock_dependencies):
     """Asserts that summarization is skipped if there are no recent messages."""
-    memory_repo, cassandra_repo, llm_client = mock_dependencies
-    service = SummaryService(memory_repo, cassandra_repo, llm_client)
+    memory_repo, cassandra_repo, llm_service = mock_dependencies
+    service = SummaryService(memory_repo, cassandra_repo, llm_service)
 
     existing_snapshot = {
         "conversation_id": "conv-1",
@@ -68,9 +66,9 @@ async def test_summary_service_skips_on_no_messages(mock_dependencies):
     memory_repo.get_recent_messages.return_value = []
 
     res_snap = await service.process_incremental_summary(conversation_id="conv-1")
-    
+
     assert res_snap == existing_snapshot
-    llm_client.call_with_circuit_breaker.assert_not_called()
+    llm_service.summarize.assert_not_called()
     cassandra_repo.upsert_summary.assert_not_called()
 
 
@@ -79,11 +77,11 @@ async def test_summary_service_incremental_algorithm_and_caching(mock_dependenci
     """
     Asserts the Incremental Summarization Algorithm:
     - Reverses message list to chronological order (oldest first).
-    - Calls gRPC client with correct parameters.
+    - Calls internal LLMService with correct parameters.
     - Increments summary_version in Cassandra and evicts Redis cache.
     """
-    memory_repo, cassandra_repo, llm_client = mock_dependencies
-    service = SummaryService(memory_repo, cassandra_repo, llm_client)
+    memory_repo, cassandra_repo, llm_service = mock_dependencies
+    service = SummaryService(memory_repo, cassandra_repo, llm_service)
 
     # 1. Mock existing snapshot and summary
     existing_snapshot = {
@@ -103,37 +101,10 @@ async def test_summary_service_incremental_algorithm_and_caching(mock_dependenci
     ]
     memory_repo.get_recent_messages.return_value = recent_messages
 
-    # Mock gRPC call response
-    llm_response = MagicMock()
-    llm_response.summary_text = "New incremented summary text."
-    
-    # We capture the stub function passed to the circuit breaker
-    async def mock_call_breaker(stub_fn, *args, **kwargs):
-        # We need a mock channel to invoke the stub_fn
-        mock_channel = MagicMock()
-        mock_stub = MagicMock()
-        mock_stub.GenerateSummary = AsyncMock(return_value=llm_response)
-        
-        # Patch the LLMServiceStub class constructor inside the stub
-        with patch("app.proto.llm_pb2_grpc.LLMServiceStub", return_value=mock_stub) as mock_stub_class:
-            result = await stub_fn(mock_channel)
-            # Verify the parameters passed to stub
-            mock_stub_class.assert_called_once_with(mock_channel)
-            mock_stub.GenerateSummary.assert_called_once()
-            request = mock_stub.GenerateSummary.call_args[0][0]
-            assert isinstance(request, llm_pb2.SummaryRequest)
-            assert request.previous_summary == "Previous summary text."
-            assert request.instructions == "Preserve key facts from the previous summary. Be concise."
-            
-            # Assert chronological order of messages in payload (oldest first, i.e. msg-2, then msg-3)
-            payload = json.loads(request.new_messages_json)
-            assert len(payload) == 2
-            assert payload[0]["message_id"] == "msg-2"
-            assert payload[1]["message_id"] == "msg-3"
-            
-            return result
-
-    llm_client.call_with_circuit_breaker.side_effect = mock_call_breaker
+    # Mock LLM Service response
+    llm_service.summarize.return_value = SummarizeResponse(
+        summary="New incremented summary text."
+    )
 
     # 2. Run summarization
     updated_snap = await service.process_incremental_summary(
@@ -144,7 +115,17 @@ async def test_summary_service_incremental_algorithm_and_caching(mock_dependenci
     # 3. Verify assertions
     # Incremented version
     assert updated_snap["summary_version"] == 3
-    assert updated_snap["last_summary_msg_id"] == "msg-3" # the newest message
+    assert updated_snap["last_summary_msg_id"] == "msg-3"  # the newest message
+
+    # Verify LLM call parameters
+    llm_service.summarize.assert_called_once()
+    request = llm_service.summarize.call_args[0][0]
+    assert request.previous_summary == "Previous summary text."
+    assert len(request.new_messages) == 2
+    assert request.new_messages[0].role == "assistant"
+    assert request.new_messages[0].content == "Hello"
+    assert request.new_messages[1].role == "user"
+    assert request.new_messages[1].content == "Hello again"
 
     # Verify Cassandra write
     cassandra_repo.upsert_summary.assert_called_once()

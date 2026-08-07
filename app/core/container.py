@@ -11,7 +11,6 @@ from typing import Optional
 from app.core.config import settings
 from app.db.cassandra import get_session
 from app.db.redis import get_redis_client
-from app.clients.llm_client import AsyncGRPCConnectionPool, LLMClient
 from app.clients.graph_client import GraphClient
 from app.clients.embedding_client import EmbeddingClient, GRPCEmbeddingClient, MockEmbeddingClient
 from app.repositories.cassandra_repository import CassandraRepository
@@ -45,8 +44,6 @@ class Container:
         self.cassandra_session = None
         self.redis_client = None
         self.milvus_repo = None
-        self.llm_pool: Optional[AsyncGRPCConnectionPool] = None
-        self.llm_client: Optional[LLMClient] = None
         self.graph_client: Optional[GraphClient] = None
         self.embedding_client: Optional[EmbeddingClient] = None
         self.llm_manager: Optional[LLMManager] = None
@@ -81,13 +78,6 @@ class Container:
         self.milvus_repo = MilvusRepository()
 
         # 2. Build clients
-        self.llm_pool = AsyncGRPCConnectionPool(
-            target=f"{settings.LLM_SERVICE_HOST}:{settings.LLM_SERVICE_PORT}",
-            pool_size=settings.GRPC_POOL_SIZE
-        )
-        await self.llm_pool.connect()
-        self.llm_client = LLMClient(self.llm_pool)
-
         self.graph_client = GraphClient(base_url=settings.GRAPH_SERVICE_URL)
         await self.graph_client.connect()
 
@@ -115,7 +105,7 @@ class Container:
         # 4. Setup Services
         self.snapshot_service = SnapshotService(self.cassandra_session, self.redis_repo)
         self.memory_service = MemoryService(self.memory_repo, self.cassandra_repo)
-        self.summary_service = SummaryService(self.memory_repo, self.cassandra_repo, self.llm_client)
+        self.summary_service = SummaryService(self.memory_repo, self.cassandra_repo, self.llm_service)
         self.long_memory_service = LongMemoryService(self.cassandra_repo, self.milvus_repo)
         self.ranking_service = RankingService()
         self.llm_service = LLMService(self.llm_manager)
@@ -145,13 +135,6 @@ class Container:
                 logger.info("✓ internal LLM gRPC server stopped.")
             except Exception as e:
                 logger.error(f"Error stopping internal LLM gRPC server: {e}")
-        if self.llm_pool:
-            try:
-                await self.llm_pool.close()
-                logger.info("✓ LLM Connection Pool closed.")
-            except Exception as e:
-                logger.error(f"Error closing LLM pool: {e}")
-                
         if self.embedding_client:
             try:
                 await self.embedding_client.close()

@@ -125,21 +125,7 @@ async def validate_startup_dependencies(container: Container) -> None:
         else:
             logger.warning(f"⚠️ {msg} (Non-strict mode: ignoring)")
 
-    # ── 6. LLM Service gRPC Endpoint Validation ────────────────────────────
-    llm_healthy = False
-    try:
-        logger.info("Verifying LLM Service gRPC connection pool...")
-        channel = await container.llm_pool.get_channel()
-        state = channel.get_state(try_to_connect=True)
-        logger.info(f"✓ LLM Service pool verified. Connectivity state: {state}")
-        llm_healthy = True
-    except Exception as e:
-        msg = f"LLM Service gRPC endpoint is unreachable/failure: {e}"
-        if settings.STRICT_STARTUP_VALIDATION:
-            logger.critical(f"✗ {msg}")
-            errors.append(f"LLMService: {e}")
-        else:
-            logger.warning(f"⚠️ {msg} (Non-strict mode: ignoring)")
+
 
     # ── 7. Internal LLM Manager Validation ─────────────────────────────────
     if container.llm_manager:

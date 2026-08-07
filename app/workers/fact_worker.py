@@ -14,8 +14,7 @@ from aiokafka import AIOKafkaConsumer
 
 from app.core.config import settings
 from app.models.memory import MemoryState
-from app.clients.llm_client import LLMClient
-from app.proto import llm_pb2, llm_pb2_grpc
+from app.services.llm_service import LLMService
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.memory_repository import MemoryRepository
 from app.services.memory_service import MemoryService
@@ -26,7 +25,7 @@ logger = logging.getLogger("memory_service.workers.fact_worker")
 class FactWorker:
     """
     Background worker that consumes memory.fact.request events, extracts
-    facts from updated summaries using the LLM gRPC pool, and schedules vector embedding.
+    facts from updated summaries using the LLM Service, and schedules vector embedding.
     """
 
     def __init__(
@@ -34,14 +33,14 @@ class FactWorker:
         cassandra_session,
         memory_service: MemoryService,
         memory_repo: MemoryRepository,
-        llm_client: LLMClient,
+        llm_service: LLMService,
         bootstrap_servers: str = settings.KAFKA_BOOTSTRAP_SERVERS,
         group_id: str = "fact-worker-group"
     ):
         self.session = cassandra_session
         self.memory_service = memory_service
         self.memory_repo = memory_repo
-        self.llm_client = llm_client
+        self.llm_service = llm_service
         self.cassandra_repo = CassandraRepository(self.session)
         self.bootstrap_servers = bootstrap_servers
         self.group_id = group_id
@@ -109,27 +108,16 @@ class FactWorker:
                                 for m in chronological_messages
                             ]
 
-                            # 3. Call LLM Service ExtractFacts via circuit breaker
-                            instructions = (
-                                "Extract key long-term user facts, preferences, habits, and hobbies "
-                                "from the conversation summary and recent messages. "
-                                "Format each fact as 'category:importance:statement' (e.g. 'preferences:0.85:User likes green tea')."
-                            )
+                            # 3. Call internal LLM Service to extract facts
+                            from app.schemas.llm import FactExtractRequest
+                            extract_request = FactExtractRequest(summary=summary_text)
 
-                            async def extract_facts_stub(channel) -> list:
-                                stub = llm_pb2_grpc.LLMServiceStub(channel)
-                                request = llm_pb2.FactsRequest(
-                                    previous_summary=summary_text,
-                                    new_messages_json=json.dumps(messages_payload),
-                                    instructions=instructions
-                                )
-                                response = await stub.ExtractFacts(
-                                    request,
-                                    timeout=settings.GRPC_TIMEOUT_SECONDS
-                                )
-                                return list(response.facts)
-
-                            facts = await self.llm_client.call_with_circuit_breaker(extract_facts_stub)
+                            logger.info(f"Invoking internal LLM service to extract facts from summary of conversation '{conversation_id}'.")
+                            facts_response = await self.llm_service.extract_facts(extract_request)
+                            facts = [
+                                f"{f.category}:{f.importance}:{f.statement}"
+                                for f in facts_response.facts
+                            ]
                             logger.info(f"Extracted {len(facts)} facts from conversation '{conversation_id}'.")
 
                             # 4. Transition snapshot to EMBEDDING_PENDING

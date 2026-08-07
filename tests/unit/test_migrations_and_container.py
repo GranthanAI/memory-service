@@ -129,7 +129,7 @@ def test_validate_schema_success():
             "summary_text", "summary_version", "event_id", "processed_at",
             "job_id", "status", "topic", "payload", "claimed_date", "claimed_at",
             "next_retry", "user_id", "category", "fact_id", "statement", "importance", 
-            "content", "message_id"
+            "content", "message_id", "created_at"
         ]
         keyspace_tables[t_name] = t_mock
         
@@ -184,13 +184,7 @@ async def test_di_container_lifecycle():
     # Mock DB clients resolution
     with patch("app.core.container.get_session") as mock_cass, \
          patch("app.core.container.get_redis_client") as mock_redis, \
-         patch("app.core.container.MilvusRepository") as mock_milvus, \
-         patch("app.core.container.AsyncGRPCConnectionPool") as mock_pool_class:
-         
-        mock_pool = MagicMock()
-        mock_pool.connect = AsyncMock()
-        mock_pool.close = AsyncMock()
-        mock_pool_class.return_value = mock_pool
+         patch("app.core.container.MilvusRepository") as mock_milvus:
 
         # Execute container bootstrap
         await container.init_resources()
@@ -199,7 +193,7 @@ async def test_di_container_lifecycle():
         assert container.cassandra_session is not None
         assert container.redis_client is not None
         assert container.milvus_repo is not None
-        assert container.llm_client is not None
+        assert container.llm_service is not None
         assert container.graph_client is not None
         assert container.memory_service is not None
         assert container.summary_service is not None
@@ -209,4 +203,3 @@ async def test_di_container_lifecycle():
 
         # Execute container teardown
         await container.shutdown_resources()
-        mock_pool.close.assert_called_once()

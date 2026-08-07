@@ -32,14 +32,14 @@ def mock_worker_dependencies():
     summary_service.process_incremental_summary = AsyncMock(return_value={"summary_version": 2})
     
     memory_repo = MagicMock()
-    memory_repo.get_summary = AsyncMock()
+    memory_repo.get_summary = AsyncMock(return_value="Mock summary text.")
     memory_repo.get_recent_messages = AsyncMock()
     
     long_memory_service = MagicMock()
     long_memory_service.merge_user_facts = AsyncMock()
     
-    llm_client = MagicMock()
-    llm_client.call_with_circuit_breaker = AsyncMock()
+    llm_service = MagicMock()
+    llm_service.extract_facts = AsyncMock()
     
     embedding_client = MagicMock()
     embedding_client.generate_embedding = AsyncMock()
@@ -47,7 +47,7 @@ def mock_worker_dependencies():
     milvus_repo = MagicMock()
     milvus_repo.delete_fact = MagicMock()
     
-    return session, memory_service, summary_service, memory_repo, long_memory_service, llm_client, embedding_client, milvus_repo
+    return session, memory_service, summary_service, memory_repo, long_memory_service, llm_service, embedding_client, milvus_repo
 
 
 def mock_kafka_consumer(msg):
@@ -144,11 +144,11 @@ async def test_summary_worker_failure_triggers_retry(mock_worker_dependencies):
 
 @pytest.mark.asyncio
 async def test_fact_worker_success(mock_worker_dependencies):
-    """FactWorker extracts facts via LLM client and schedules vector embedding."""
-    session, memory_service, _, memory_repo, _, llm_client, _, _ = mock_worker_dependencies
+    """FactWorker extracts facts via LLM service and schedules vector embedding."""
+    session, memory_service, _, memory_repo, _, llm_service, _, _ = mock_worker_dependencies
     
     cassandra_repo = MagicMock()
-    worker = FactWorker(session, memory_service, memory_repo, llm_client)
+    worker = FactWorker(session, memory_service, memory_repo, llm_service)
     worker.cassandra_repo = cassandra_repo
 
     payload = {
@@ -159,7 +159,13 @@ async def test_fact_worker_success(mock_worker_dependencies):
     }
     
     # Mock LLM return facts
-    llm_client.call_with_circuit_breaker.return_value = ["preferences:0.85:Likes tea", "habits:0.7:Wakes early"]
+    from app.schemas.llm import FactExtractResponse, ExtractedFact
+    llm_service.extract_facts.return_value = FactExtractResponse(
+        facts=[
+            ExtractedFact(category="preferences", importance=0.85, statement="Likes tea"),
+            ExtractedFact(category="habits", importance=0.7, statement="Wakes early")
+        ]
+    )
 
     msg = MagicMock(value=json.dumps(payload).encode("utf-8"))
     mock_consumer = mock_kafka_consumer(msg)
@@ -170,7 +176,7 @@ async def test_fact_worker_success(mock_worker_dependencies):
 
     # Assertions
     memory_service.transition_state.assert_any_call("conv-123", MemoryState.EXTRACTING_FACTS)
-    llm_client.call_with_circuit_breaker.assert_called_once()
+    llm_service.extract_facts.assert_called_once()
     memory_service.transition_state.assert_any_call("conv-123", MemoryState.EMBEDDING_PENDING)
     
     cassandra_repo.insert_outbox_job.assert_called_once()

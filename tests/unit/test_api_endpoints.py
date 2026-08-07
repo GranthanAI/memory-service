@@ -20,7 +20,7 @@ from app.main import app
 from app.api.dependencies import (
     get_cassandra_health_session,
     get_redis_health_client,
-    get_llm_pool,
+    get_llm_service,
     get_context_builder,
 )
 
@@ -49,14 +49,11 @@ def make_mock_redis_client(ping_ok: bool = True, fail: bool = False):
     return client
 
 
-def make_mock_llm_pool(healthy: bool = True):
-    pool = AsyncMock()
-    pool.pool_size = 3
-    if healthy:
-        pool.get_channel.return_value = MagicMock()
-    else:
-        pool.get_channel.side_effect = RuntimeError("No healthy gRPC channels available")
-    return pool
+def make_mock_llm_service(healthy: bool = True):
+    service = MagicMock()
+    service.manager = MagicMock()
+    service.manager.check_health = AsyncMock(return_value=healthy)
+    return service
 
 
 def make_mock_context_builder(payload: dict = None, fail: bool = False):
@@ -89,7 +86,7 @@ def override_all_healthy():
     """Apply dependency overrides for all-healthy infrastructure."""
     app.dependency_overrides[get_cassandra_health_session] = lambda: make_mock_cassandra_session()
     app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client()
-    app.dependency_overrides[get_llm_pool] = lambda: make_mock_llm_pool()
+    app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service()
 
 
 def clear_overrides():
@@ -125,13 +122,12 @@ class TestReadinessProbe:
         assert body["checks"]["cassandra"]["status"] == "ok"
         assert body["checks"]["redis"]["status"] == "ok"
         assert body["checks"]["milvus"]["status"] == "ok"
-        assert body["checks"]["llm_grpc"]["status"] == "ok"
-        assert body["checks"]["llm_grpc"]["pool_size"] == 3
+        assert body["checks"]["llm_engine"]["status"] == "ok"
 
     def test_ready_cassandra_fails(self):
         app.dependency_overrides[get_cassandra_health_session] = lambda: make_mock_cassandra_session(fail=True)
         app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client()
-        app.dependency_overrides[get_llm_pool] = lambda: make_mock_llm_pool()
+        app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service()
         with patch("app.api.internal.health.check_milvus_ready", return_value=True):
             with TestClient(app, raise_server_exceptions=False) as client:
                 response = client.get("/internal/health/ready")
@@ -144,7 +140,7 @@ class TestReadinessProbe:
     def test_ready_redis_fails(self):
         app.dependency_overrides[get_cassandra_health_session] = lambda: make_mock_cassandra_session()
         app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client(fail=True)
-        app.dependency_overrides[get_llm_pool] = lambda: make_mock_llm_pool()
+        app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service()
         with patch("app.api.internal.health.check_milvus_ready", return_value=True):
             with TestClient(app, raise_server_exceptions=False) as client:
                 response = client.get("/internal/health/ready")
@@ -166,19 +162,19 @@ class TestReadinessProbe:
     def test_ready_grpc_fails(self):
         app.dependency_overrides[get_cassandra_health_session] = lambda: make_mock_cassandra_session()
         app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client()
-        app.dependency_overrides[get_llm_pool] = lambda: make_mock_llm_pool(healthy=False)
+        app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service(healthy=False)
         with patch("app.api.internal.health.check_milvus_ready", return_value=True):
             with TestClient(app, raise_server_exceptions=False) as client:
                 response = client.get("/internal/health/ready")
         assert response.status_code == 503
         body = response.json()
         assert body["status"] == "not_ready"
-        assert body["checks"]["llm_grpc"]["status"] == "error"
+        assert body["checks"]["llm_engine"]["status"] == "error"
 
     def test_ready_all_fail_returns_503(self):
         app.dependency_overrides[get_cassandra_health_session] = lambda: make_mock_cassandra_session(fail=True)
         app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client(fail=True)
-        app.dependency_overrides[get_llm_pool] = lambda: make_mock_llm_pool(healthy=False)
+        app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service(healthy=False)
         with patch("app.api.internal.health.check_milvus_ready", return_value=False):
             with TestClient(app, raise_server_exceptions=False) as client:
                 response = client.get("/internal/health/ready")

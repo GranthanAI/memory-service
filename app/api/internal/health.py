@@ -24,9 +24,10 @@ from fastapi import APIRouter, Depends, Response
 
 from app.api.dependencies import (
     get_cassandra_health_session,
-    get_llm_pool,
+    get_llm_service,
     get_redis_health_client,
 )
+from app.core.config import settings
 from app.db.milvus import check_milvus_ready
 
 logger = logging.getLogger("memory_service.api.health")
@@ -47,7 +48,7 @@ async def readiness_probe(
     response: Response,
     cassandra_session=Depends(get_cassandra_health_session),
     redis_client=Depends(get_redis_health_client),
-    llm_pool=Depends(get_llm_pool),
+    llm_service=Depends(get_llm_service),
 ) -> Dict[str, Any]:
     """
     Performs deep health checks on all four infrastructure components.
@@ -92,16 +93,18 @@ async def readiness_probe(
         checks["milvus"] = {"status": "error", "detail": str(e)}
         all_healthy = False
 
-    # ── 4. LLM gRPC Pool ─────────────────────────────────────────────────────
+    # ── 4. Internal LLM Engine ────────────────────────────────────────────────
     try:
-        channel = await llm_pool.get_channel()
-        checks["llm_grpc"] = {
-            "status": "ok",
-            "pool_size": llm_pool.pool_size,
+        llm_ok = await llm_service.manager.check_health()
+        checks["llm_engine"] = {
+            "status": "ok" if llm_ok else "error",
+            "provider": settings.LLM_PROVIDER,
         }
+        if not llm_ok:
+            all_healthy = False
     except Exception as e:
-        logger.warning(f"LLM gRPC pool readiness check failed: {e}")
-        checks["llm_grpc"] = {"status": "error", "detail": str(e)}
+        logger.warning(f"Internal LLM engine readiness check failed: {e}")
+        checks["llm_engine"] = {"status": "error", "detail": str(e)}
         all_healthy = False
 
     # ── Response ──────────────────────────────────────────────────────────────

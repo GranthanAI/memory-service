@@ -114,36 +114,30 @@ async def test_end_to_end_worker_pipeline_integration(clean_pipeline_tables):
     redis_repo.set_snapshot = AsyncMock()
     redis_repo.get_recent_messages = AsyncMock(return_value=None)
     redis_repo.set_recent_messages = AsyncMock()
+    redis_repo.get_summary = AsyncMock(return_value=None)
     redis_repo.invalidate_conversation = AsyncMock()
 
     memory_repo = MemoryRepository(cassandra_repo, redis_repo)
     snapshot_service = SnapshotService(session, redis_repo)
     memory_service = MemoryService(memory_repo, cassandra_repo)
 
-    # 1. Mock LLM client to return scripted summary, facts, and embeddings
-    llm_client = MagicMock(spec=LLMClient)
-    llm_client.state = "CLOSED"
+    # 1. Mock LLM service to return scripted summary and facts
+    from app.schemas.llm import SummarizeResponse, FactExtractResponse, ExtractedFact
+    llm_service = MagicMock()
     
-    # Define LLM client call responses
     summary_text = "Integrated summary of user conversation"
-    extracted_facts = ["preferences:0.9:Likes black coffee", "habits:0.8:Wakes up at 6am"]
+    llm_service.summarize = AsyncMock(return_value=SummarizeResponse(summary=summary_text))
+    llm_service.extract_facts = AsyncMock(return_value=FactExtractResponse(
+        facts=[
+            ExtractedFact(category="preferences", importance=0.9, statement="Likes black coffee"),
+            ExtractedFact(category="habits", importance=0.8, statement="Wakes up at 6am")
+        ]
+    ))
+    
     embedding_vector = [0.15] * settings.VECTOR_DIMENSION
 
-    async def cb_side_effect(stub_fn, *args, **kwargs):
-        # Inspect stub_fn source or stub name to return correct mock response
-        fn_name = stub_fn.__name__
-        if "summary_stub" in fn_name or "GenerateSummary" in fn_name:
-            return summary_text
-        elif "extract_facts_stub" in fn_name or "ExtractFacts" in fn_name:
-            return extracted_facts
-        elif "embed_stub" in fn_name or "GenerateEmbedding" in fn_name:
-            return embedding_vector
-        return None
-
-    llm_client.call_with_circuit_breaker = AsyncMock(side_effect=cb_side_effect)
-
     # Instantiate services
-    summary_service = SummaryService(memory_repo, cassandra_repo, llm_client)
+    summary_service = SummaryService(memory_repo, cassandra_repo, llm_service)
     long_memory_service = LongMemoryService(cassandra_repo, milvus_repo)
 
     processed_event_repo = ProcessedEventRepository(session)
@@ -257,10 +251,10 @@ async def test_end_to_end_worker_pipeline_integration(clean_pipeline_tables):
     # --- STEP 6: FactWorker processes fact request ---
     # 1. Transition to EXTRACTING_FACTS
     await memory_service.transition_state(conversation_id, MemoryState.EXTRACTING_FACTS)
-    # 2. Extract facts via LLM
-    async def extract_facts_stub(channel):
-        pass
-    facts = await llm_client.call_with_circuit_breaker(extract_facts_stub)
+    # 2. Extract facts via LLM service
+    from app.schemas.llm import FactExtractRequest
+    facts_res = await llm_service.extract_facts(FactExtractRequest(summary=summary_text))
+    facts = [f"{f.category}:{f.importance}:{f.statement}" for f in facts_res.facts]
     # 3. Transition to EMBEDDING_PENDING
     await memory_service.transition_state(conversation_id, MemoryState.EMBEDDING_PENDING)
     # 4. Write embedding outbox job

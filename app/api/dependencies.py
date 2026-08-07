@@ -16,7 +16,6 @@ from fastapi import Request
 
 from app.services.context_builder import ContextBuilder
 from app.services.llm_service import LLMService
-from app.clients.llm_client import AsyncGRPCConnectionPool
 from app.db.cassandra import get_session
 from app.db.redis import get_redis_client
 
@@ -40,13 +39,7 @@ def get_context_builder(request: Request) -> ContextBuilder:
     return container.context_builder
 
 
-def get_llm_pool(request: Request) -> AsyncGRPCConnectionPool:
-    """
-    Provides the LLM gRPC connection pool singleton.
-    Used by the /ready probe to verify gRPC channel availability.
-    """
-    container = get_container(request)
-    return container.llm_pool
+
 
 
 def get_cassandra_health_session(request: Request):

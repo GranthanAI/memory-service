@@ -10,11 +10,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from app.clients.llm_client import LLMClient
 from app.core.config import settings
-from app.proto import llm_pb2, llm_pb2_grpc
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.memory_repository import MemoryRepository
+from app.services.llm_service import LLMService
+from app.schemas.llm import SummarizeRequest, LLMMessage
 
 logger = logging.getLogger("memory_service.services.summary_service")
 
@@ -28,11 +28,11 @@ class SummaryService:
         self,
         memory_repo: MemoryRepository,
         cassandra_repo: CassandraRepository,
-        llm_client: LLMClient
+        llm_service: LLMService
     ):
         self.memory_repo = memory_repo
         self.cassandra_repo = cassandra_repo
-        self.llm_client = llm_client
+        self.llm_service = llm_service
 
     async def process_incremental_summary(
         self,
@@ -63,39 +63,19 @@ class SummaryService:
         # Reverse the window list to be in chronological order (oldest first)
         chronological_messages = list(reversed(messages))
 
-        # 4. Invoke LLM gRPC Service via Circuit Breaker
-        default_instructions = (
-            "Integrate the new messages into an updated summary. "
-            "Preserve key facts from the previous summary. Be concise."
-        )
-        final_instructions = instructions or default_instructions
-
-        # Format message payloads for json serialization
-        messages_payload = [
-            {
-                "message_id": msg["message_id"],
-                "role": msg["role"],
-                "content": msg["content"],
-                "created_at": msg.get("created_at").isoformat() if isinstance(msg.get("created_at"), datetime) else str(msg.get("created_at"))
-            }
+        # 4. Invoke LLM Service
+        llm_messages = [
+            LLMMessage(role=msg["role"], content=msg["content"])
             for msg in chronological_messages
         ]
+        summarize_request = SummarizeRequest(
+            previous_summary=prev_summary,
+            new_messages=llm_messages
+        )
 
-        async def summary_stub(channel) -> str:
-            stub = llm_pb2_grpc.LLMServiceStub(channel)
-            request = llm_pb2.SummaryRequest(
-                previous_summary=prev_summary,
-                new_messages_json=json.dumps(messages_payload),
-                instructions=final_instructions
-            )
-            response = await stub.GenerateSummary(
-                request,
-                timeout=settings.GRPC_TIMEOUT_SECONDS
-            )
-            return response.summary_text
-
-        logger.info(f"Invoking LLM gRPC service for incremental summary of conversation '{conversation_id}'.")
-        new_summary_text = await self.llm_client.call_with_circuit_breaker(summary_stub)
+        logger.info(f"Invoking internal LLM service for incremental summary of conversation '{conversation_id}'.")
+        summarize_response = await self.llm_service.summarize(summarize_request)
+        new_summary_text = summarize_response.summary
 
         # 5. Write the versioned summary record back to Cassandra
         next_version = snapshot["summary_version"] + 1
