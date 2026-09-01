@@ -34,6 +34,20 @@ class SystemSettings(BaseSettings):
     KAFKA_DELETE_TOPIC: str = "memory.delete.request"
     KAFKA_DLQ_TOPIC: str = "memory.dlq"
 
+    # Inbound ingestion topic: published by llm-service after every response
+    # (KafkaPublisher.publish_memory_update). Feeds EventDispatcher to append
+    # the user/assistant turn to conversation_recent_messages and advance the
+    # summary/fact/embedding pipeline.
+    KAFKA_MEMORY_UPDATE_TOPIC: str = "memory.update.requested"
+
+    # Number of ingested messages (user + assistant turns counted individually)
+    # per conversation after which EventDispatcher marks the snapshot
+    # SUMMARY_PENDING and stages a memory.summary.request job. Previously
+    # hardcoded to 20 inside EventDispatcher's constructor default; exposed
+    # here so it can be tuned per-environment (e.g. lowered for faster
+    # end-to-end verification) without editing code.
+    SUMMARY_THRESHOLD: int = 20
+
     # ─── Cassandra (Primary Source of Truth) ─────────────────────────────────
     # Comma-separated for multi-node clusters: "10.0.0.1,10.0.0.2,10.0.0.3"
     CASSANDRA_HOSTS: str = "localhost"
@@ -103,12 +117,16 @@ class SystemSettings(BaseSettings):
     # ─── Internal LLM Engine ──────────────────────────────────────────────────
     LLM_PROVIDER: str = "groq"
     GROQ_API_KEY: str = ""
-    LLM_MODEL: str = "llama-3.3-70b-versatile"
+    LLM_MODEL: str = "openai/gpt-oss-20b"
     LLM_TIMEOUT_SECONDS: float = 60.0
     LLM_MAX_RETRIES: int = 3
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 1024
-    LLM_GRPC_PORT: int = 50052
+    # Combined gRPC server port: serves both the internal LLM Service
+    # (summarization/fact-extraction) and the Memory Context Service
+    # (GetMemoryContext/GetShortTermMemory, consumed by llm-service's
+    # ContextCollector — default matches llm-service's memory_service_port)
+    MEMORY_CONTEXT_GRPC_PORT: int = 50051
     LLM_POOL_MAX_CONNECTIONS: int = 50
     LLM_POOL_MAX_KEEPALIVE_CONNECTIONS: int = 10
     LLM_MAX_CONCURRENT_REQUESTS: int = 10
