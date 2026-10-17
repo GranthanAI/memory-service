@@ -208,14 +208,14 @@ async def test_retry_scheduler_dlq_integration(clean_pipeline_tables):
 
     # Verify original PROCESSING job is deleted
     processing_rows = list(session.execute(
-        "SELECT job_id FROM retry_jobs WHERE status = 'PROCESSING' AND job_id = %s",
+        "SELECT job_id FROM retry_jobs WHERE status = 'PROCESSING' AND job_id = %s ALLOW FILTERING",
         [job_id]
     ))
     assert len(processing_rows) == 0
 
     # Verify FAILED row is written
     failed_rows = list(session.execute(
-        "SELECT job_id, last_error FROM retry_jobs WHERE status = 'FAILED' AND job_id = %s",
+        "SELECT job_id, last_error FROM retry_jobs WHERE status = 'FAILED' AND job_id = %s ALLOW FILTERING",
         [job_id]
     ))
     assert len(failed_rows) == 1

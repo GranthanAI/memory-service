@@ -5,6 +5,7 @@ Dependency Injection Container for the Memory Service.
 Centralizes resource allocation, singleton provider registration, and service wiring.
 """
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -29,6 +30,13 @@ from app.services.llm_service import LLMService
 from app.proto.server import GRPCServer
 from app.factories.llm_factory import LLMFactory
 from app.managers.llm_manager import LLMManager
+from app.events.dispatcher import EventDispatcher
+from app.events.kafka_producer import KafkaProducer
+from app.workers.memory_update_worker import MemoryUpdateWorker
+from app.workers.outbox_worker import OutboxDaemonWorker
+from app.workers.summary_worker import SummaryWorker
+from app.workers.fact_worker import FactWorker
+from app.workers.embedding_worker import EmbeddingWorker
 
 logger = logging.getLogger("memory_service.core.container")
 
@@ -64,6 +72,16 @@ class Container:
         self.context_builder: Optional[ContextBuilder] = None
         self.llm_service: Optional[LLMService] = None
         self.grpc_server: Optional[GRPCServer] = None
+
+        # Ingestion pipeline (memory.update.requested -> EventDispatcher ->
+        # summary/fact/embedding worker chain)
+        self.kafka_producer: Optional[KafkaProducer] = None
+        self.event_dispatcher: Optional[EventDispatcher] = None
+        self.memory_update_worker: Optional[MemoryUpdateWorker] = None
+        self.outbox_worker: Optional[OutboxDaemonWorker] = None
+        self.summary_worker: Optional[SummaryWorker] = None
+        self.fact_worker: Optional[FactWorker] = None
+        self.embedding_worker: Optional[EmbeddingWorker] = None
 
     async def init_resources(self) -> None:
         """
@@ -103,16 +121,17 @@ class Container:
         self.memory_repo = MemoryRepository(self.cassandra_repo, self.redis_repo)
 
         # 4. Setup Services
+        # llm_service must be constructed before SummaryService, which only
+        # stores the reference passed at __init__ time — passing the
+        # not-yet-assigned self.llm_service (still None here) silently broke
+        # every summarization job with "'NoneType' object has no attribute
+        # 'summarize'".
+        self.llm_service = LLMService(self.llm_manager)
         self.snapshot_service = SnapshotService(self.cassandra_session, self.redis_repo)
         self.memory_service = MemoryService(self.memory_repo, self.cassandra_repo)
         self.summary_service = SummaryService(self.memory_repo, self.cassandra_repo, self.llm_service)
         self.long_memory_service = LongMemoryService(self.cassandra_repo, self.milvus_repo)
         self.ranking_service = RankingService()
-        self.llm_service = LLMService(self.llm_manager)
-
-        # Wire internal LLM gRPC server
-        self.grpc_server = GRPCServer(settings.LLM_GRPC_PORT, self.llm_service)
-        await self.grpc_server.start()
 
         # 5. Setup Retrieval & Context services
         self.retrieval_service = RetrievalService(
@@ -124,11 +143,90 @@ class Container:
             graph_client=self.graph_client
         )
 
+        # Wire combined gRPC server: internal LLM Service (summarization/fact
+        # extraction) + Memory Context Service (consumed by llm-service's
+        # ContextCollector via GetMemoryContext/GetShortTermMemory)
+        self.grpc_server = GRPCServer(
+            settings.MEMORY_CONTEXT_GRPC_PORT,
+            self.llm_service,
+            context_builder=self.context_builder,
+            embedding_client=self.embedding_client,
+        )
+        await self.grpc_server.start()
+
+        # 6. Wire the ingestion pipeline: memory.update.requested -> EventDispatcher
+        # (appends messages, advances snapshot state) -> outbox -> summary/fact/embedding
+        # worker chain. Without this chain, nothing populates Cassandra/Redis/Milvus
+        # from real conversations even though the read-side (ContextBuilder,
+        # GetMemoryContext gRPC) is fully wired.
+        self.kafka_producer = KafkaProducer(bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS)
+        await self.kafka_producer.start()
+
+        self.event_dispatcher = EventDispatcher(
+            processed_event_repo=self.processed_event_repo,
+            memory_repo=self.memory_repo,
+            snapshot_service=self.snapshot_service,
+            summary_threshold=settings.SUMMARY_THRESHOLD,
+        )
+
+        self.memory_update_worker = MemoryUpdateWorker(dispatcher=self.event_dispatcher)
+        await self.memory_update_worker.start()
+
+        self.outbox_worker = OutboxDaemonWorker(
+            cassandra_session=self.cassandra_session, producer=self.kafka_producer
+        )
+        asyncio.create_task(self.outbox_worker.start())
+
+        self.summary_worker = SummaryWorker(
+            cassandra_session=self.cassandra_session,
+            memory_service=self.memory_service,
+            summary_service=self.summary_service,
+        )
+        await self.summary_worker.start()
+
+        self.fact_worker = FactWorker(
+            cassandra_session=self.cassandra_session,
+            memory_service=self.memory_service,
+            memory_repo=self.memory_repo,
+            llm_service=self.llm_service,
+        )
+        await self.fact_worker.start()
+
+        self.embedding_worker = EmbeddingWorker(
+            cassandra_session=self.cassandra_session,
+            memory_service=self.memory_service,
+            long_memory_service=self.long_memory_service,
+            embedding_client=self.embedding_client,
+        )
+        await self.embedding_worker.start()
+
         logger.info("✓ Dependency injection container wired successfully.")
 
     async def shutdown_resources(self) -> None:
         """Gracefully tears down clients and active connection pools."""
         logger.info("Tearing down container clients...")
+        for worker_name in (
+            "memory_update_worker",
+            "outbox_worker",
+            "summary_worker",
+            "fact_worker",
+            "embedding_worker",
+        ):
+            worker = getattr(self, worker_name, None)
+            if worker:
+                try:
+                    await worker.stop()
+                    logger.info(f"✓ {worker_name} stopped.")
+                except Exception as e:
+                    logger.error(f"Error stopping {worker_name}: {e}")
+
+        if self.kafka_producer:
+            try:
+                await self.kafka_producer.stop()
+                logger.info("✓ Kafka Producer stopped.")
+            except Exception as e:
+                logger.error(f"Error stopping Kafka Producer: {e}")
+
         if self.grpc_server:
             try:
                 await self.grpc_server.stop()

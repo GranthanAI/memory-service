@@ -20,13 +20,13 @@ sync:
 run:
 	uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# Start existing infrastructure containers on the host
+# Start shared GraphGPT docker infrastructure containers
 infra:
-	docker start graphgpt-redis graphgpt-kafka graphgpt-cassandra milvus-etcd milvus-minio milvus-standalone
+	docker compose -f ../docker-compose.yml up -d
 
-# Stop existing infrastructure containers on the host
+# Stop shared docker infrastructure containers
 infra-down:
-	docker stop graphgpt-redis graphgpt-kafka milvus-standalone milvus-etcd milvus-minio
+	docker compose -f ../docker-compose.yml down
 
 # Check code formatting and style
 lint:

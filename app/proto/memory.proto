@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package memory;
+
+service MemoryService {
+  // Fetch all relevant memory context for a conversation
+  rpc GetMemoryContext(GetMemoryContextRequest) returns (GetMemoryContextResponse);
+
+  // Fetch only short-term conversation history
+  rpc GetShortTermMemory(GetShortTermMemoryRequest) returns (GetShortTermMemoryResponse);
+}
+
+enum MemoryScope {
+  SHORT_TERM = 0;
+  MEDIUM = 1;
+  LONG_TERM = 2;
+  SEMANTIC = 3;
+  ALL = 4;
+}
+
+message GetMemoryContextRequest {
+  string conversation_id = 1;
+  string user_id = 2;
+  string query = 3;           // for semantic memory retrieval
+  MemoryScope scope = 4;      // SHORT_TERM | MEDIUM | LONG_TERM | SEMANTIC | ALL
+  int32 max_tokens = 5;       // token budget for memory section
+  string trace_id = 6;
+}
+
+message GetShortTermMemoryRequest {
+  string conversation_id = 1;
+  string user_id = 2;
+  int32 limit = 3;
+  string trace_id = 4;
+}
+
+message Message {
+  string role = 1;            // "user" | "assistant" | "system" | "tool"
+  string content = 2;
+  int64 timestamp = 3;
+  string message_id = 4;
+}
+
+message Fact {
+  string content = 1;
+  float confidence = 2;
+  string category = 3;
+  int64 last_updated = 4;
+}
+
+message SemanticSnippet {
+  string content = 1;
+  float relevance_score = 2;
+  string source_message_id = 3;
+}
+
+message GetMemoryContextResponse {
+  repeated Message short_term_messages = 1;
+  string medium_summary = 2;
+  repeated Fact long_term_facts = 3;
+  repeated SemanticSnippet semantic_snippets = 4;
+  int32 total_tokens = 5;
+  string request_id = 6;
+}
+
+message GetShortTermMemoryResponse {
+  repeated Message messages = 1;
+  int32 total_tokens = 2;
+  string request_id = 3;
+}

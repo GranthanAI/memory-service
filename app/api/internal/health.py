@@ -95,7 +95,7 @@ async def readiness_probe(
 
     # ── 4. Internal LLM Engine ────────────────────────────────────────────────
     try:
-        llm_ok = await llm_service.manager.check_health()
+        llm_ok = await llm_service.llm_manager.check_health()
         checks["llm_engine"] = {
             "status": "ok" if llm_ok else "error",
             "provider": settings.LLM_PROVIDER,
