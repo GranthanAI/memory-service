@@ -87,11 +87,23 @@ class ContextBuilder:
         if snapshot:
             if not resolved_user_id:
                 resolved_user_id = snapshot.get("user_id")
-            elif snapshot.get("user_id") != resolved_user_id:
+            elif snapshot.get("user_id") and snapshot.get("user_id") != resolved_user_id:
+                # The conversation belongs to someone else: return nothing private
+                # (previously this was only logged and the other user's messages,
+                # summary and facts were returned).
                 logger.warning(
                     f"User ID mismatch for conversation {conversation_id}: "
-                    f"snapshot user_id={snapshot.get('user_id')}, requested user_id={resolved_user_id}"
+                    f"snapshot user_id={snapshot.get('user_id')}, requested user_id={resolved_user_id}; denying"
                 )
+                return {
+                    "conversation_id": conversation_id,
+                    "user_id": resolved_user_id,
+                    "current_summary": "",
+                    "short_term_messages": [],
+                    "parent_summaries": [],
+                    "relevant_facts": [],
+                    "metadata": {"parent_summaries_available": False, "facts_retrieved_count": 0, "denied": True},
+                }
 
         # Assemble final context response payload
         context_payload = {

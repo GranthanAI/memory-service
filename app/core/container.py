@@ -9,6 +9,8 @@ import asyncio
 import logging
 from typing import Optional
 
+from app.services.memory_controls import MemoryControls
+from app.services.user_memory_service import UserMemoryService
 from app.core.config import settings
 from app.db.cassandra import get_session
 from app.db.redis import get_redis_client
@@ -69,6 +71,8 @@ class Container:
         self.long_memory_service: Optional[LongMemoryService] = None
         self.ranking_service: Optional[RankingService] = None
         self.retrieval_service: Optional[RetrievalService] = None
+        self.memory_controls: Optional[MemoryControls] = None
+        self.user_memory_service: Optional[UserMemoryService] = None
         self.context_builder: Optional[ContextBuilder] = None
         self.llm_service: Optional[LLMService] = None
         self.grpc_server: Optional[GRPCServer] = None
@@ -134,9 +138,17 @@ class Container:
         self.ranking_service = RankingService()
 
         # 5. Setup Retrieval & Context services
+        self.memory_controls = MemoryControls(self.cassandra_repo)
         self.retrieval_service = RetrievalService(
             memory_repo=self.memory_repo,
-            milvus_repo=self.milvus_repo
+            milvus_repo=self.milvus_repo,
+            controls=self.memory_controls,
+        )
+        self.user_memory_service = UserMemoryService(
+            cassandra_repo=self.cassandra_repo,
+            milvus_repo=self.milvus_repo,
+            embedding_client=self.embedding_client,
+            controls=self.memory_controls,
         )
         self.context_builder = ContextBuilder(
             retrieval_service=self.retrieval_service,

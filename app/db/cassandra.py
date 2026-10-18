@@ -178,6 +178,32 @@ _DDL_STATEMENTS = [
 ]
 
 
+# Added by migration V4 (app/db/migrations.py), so existing keyspaces get them too.
+_USER_CONTROLS_DDL = [
+    # Table 9: Per-user memory controls (user-facing). No row = memory ON (default).
+    # When memory_enabled is false, no saved memories are read into answers and no new
+    # ones are learned (enforced in RetrievalService / LongMemoryService / FactWorker).
+    """
+    CREATE TABLE IF NOT EXISTS user_memory_settings (
+        user_id             TEXT,
+        memory_enabled      BOOLEAN,
+        updated_at          TIMESTAMP,
+        PRIMARY KEY (user_id)
+    );
+    """,
+    # Table 10: Tombstones for memories the user deleted or corrected. A fact whose
+    # normalised statement hash is here is never stored again, so background extraction
+    # from older conversation summaries cannot silently re-learn a deleted memory.
+    """
+    CREATE TABLE IF NOT EXISTS user_fact_tombstones (
+        user_id             TEXT,
+        statement_hash      TEXT,
+        deleted_at          TIMESTAMP,
+        PRIMARY KEY (user_id, statement_hash)
+    );
+    """,
+]
+
 # ─── Lifecycle Functions ──────────────────────────────────────────────────────
 
 def connect_cassandra() -> None:

@@ -119,3 +119,50 @@ async def verify_service_auth(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Unauthorized service access. Provide a valid X-API-Key or Bearer token.",
     )
+
+
+
+def verify_user_access_token(token: str) -> Optional[str]:
+    """Verifies an auth-service access token and returns the user id (`sub`), or None.
+
+    Stricter than verify_jwt (used for service tokens): the header must declare HS256,
+    `exp` is REQUIRED and must be in the future, `iss` must be auth-service, and `sub`
+    must be a UUID. Only the verified subject is ever used as the user's identity.
+    """
+    import uuid as _uuid
+
+    secret = settings.USER_JWT_SECRET_KEY
+    if not secret or not token:
+        return None
+    try:
+        header_segment, payload_segment, signature_segment = token.split(".")
+        header = json.loads(base64url_decode(header_segment).decode("utf-8"))
+        if header.get("alg") != "HS256":
+            return None
+        expected = hmac.new(secret.encode("utf-8"), f"{header_segment}.{payload_segment}".encode("utf-8"),
+                            hashlib.sha256).digest()
+        if not hmac.compare_digest(expected, base64url_decode(signature_segment)):
+            return None
+        payload = json.loads(base64url_decode(payload_segment).decode("utf-8"))
+        exp = payload.get("exp")
+        if not isinstance(exp, (int, float)) or exp < time.time():
+            return None
+        if payload.get("iss") != settings.USER_JWT_ISSUER:
+            return None
+        return str(_uuid.UUID(str(payload.get("sub"))))
+    except Exception:
+        return None
+
+
+async def get_current_user_id(
+    bearer: Optional[HTTPAuthorizationCredentials] = Security(http_bearer),
+) -> str:
+    """FastAPI dependency for public, user-facing routes."""
+    user_id = verify_user_access_token(bearer.credentials) if bearer else None
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user_id

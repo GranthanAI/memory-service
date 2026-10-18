@@ -50,6 +50,11 @@ async def trace_id_middleware(request: Request, call_next):
 # ── Internal API routes ───────────────────────────────────────────────────────
 app.include_router(api_router)
 
+# ── Public, user-facing routes (/memory/*, JWT-authenticated, via the gateway) ──
+from app.api.user_memory import router as user_memory_router  # noqa: E402
+
+app.include_router(user_memory_router)
+
 # ── Prometheus metrics sub-app ────────────────────────────────────────────────
 # Mounted as a separate ASGI sub-app at /metrics.
 # Compatible with standard Prometheus scrape configs.

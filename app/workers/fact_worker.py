@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from aiokafka import AIOKafkaConsumer
 
+from app.services.memory_controls import MemoryControls
 from app.core.config import settings
 from app.models.memory import MemoryState
 from app.services.llm_service import LLMService
@@ -43,11 +44,22 @@ class FactWorker:
         self.memory_repo = memory_repo
         self.llm_service = llm_service
         self.cassandra_repo = CassandraRepository(self.session)
+        self.controls = MemoryControls(self.cassandra_repo)
         self.bootstrap_servers = bootstrap_servers
         self.group_id = group_id
         self._consumer = None
         self.is_running = False
         self._task = None
+
+    async def _extract_facts(self, user_id: str, conversation_id: str, extract_request) -> list:
+        """LLM fact extraction, unless the user turned memory off: then nothing is learned
+        (no LLM call) and the snapshot state machine still advances with an empty list."""
+        if not self.controls.is_enabled(user_id):
+            logger.info(f"Memory is off for user {user_id}; skipping fact extraction.")
+            return []
+        logger.info(f"Invoking internal LLM service to extract facts from summary of conversation '{conversation_id}'.")
+        facts_response = await self.llm_service.extract_facts(extract_request)
+        return [f"{f.category}:{f.importance}:{f.statement}" for f in facts_response.facts]
 
     async def start(self) -> None:
         """Starts the FactWorker consumer loop."""
@@ -120,12 +132,7 @@ class FactWorker:
                             from app.schemas.llm import FactExtractRequest
                             extract_request = FactExtractRequest(summary=summary_text)
 
-                            logger.info(f"Invoking internal LLM service to extract facts from summary of conversation '{conversation_id}'.")
-                            facts_response = await self.llm_service.extract_facts(extract_request)
-                            facts = [
-                                f"{f.category}:{f.importance}:{f.statement}"
-                                for f in facts_response.facts
-                            ]
+                            facts = await self._extract_facts(user_id, conversation_id, extract_request)
                             logger.info(f"Extracted {len(facts)} facts from conversation '{conversation_id}'.")
 
                             # 4. Transition snapshot to EMBEDDING_PENDING

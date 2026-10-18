@@ -201,6 +201,20 @@ class MilvusRepository:
             logger.error(f"Error performing Milvus vector search for user {user_id}: {e}")
             return []
 
+    def list_user_facts(self, user_id: str, limit: int = 500) -> List[Dict[str, Any]]:
+        """All of one user's saved facts (newest first). `user_id` must already be a
+        validated identifier (callers pass the verified token subject)."""
+        if self.collection is None:
+            raise RuntimeError("Milvus collection is not initialized.")
+        fields = ["fact_id", "conversation_id", "category", "statement", "importance", "fact_version", "created_at"]
+        rows = self.collection.query(
+            expr=f"user_id == '{user_id}'",
+            output_fields=fields,
+            limit=limit,
+            consistency_level="Strong",
+        )
+        return sorted(rows, key=lambda r: r.get("created_at") or 0, reverse=True)
+
     def delete_fact(self, user_id: str, fact_id: str) -> None:
         """
         Deletes a specific fact record.

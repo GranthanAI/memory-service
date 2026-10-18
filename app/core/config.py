@@ -104,6 +104,13 @@ class SystemSettings(BaseSettings):
     JWT_SECRET_KEY: str = "graphgpt-jwt-secret"
     JWT_ALGORITHM: str = "HS256"
 
+    # ─── End-user Authentication (public /memory routes) ──────────────────────
+    # User access tokens are issued by auth-service: this MUST equal auth-service's
+    # JWT_SECRET_KEY (it is NOT the service-to-service JWT_SECRET_KEY above). Empty
+    # disables the public routes (every call is rejected).
+    USER_JWT_SECRET_KEY: str = ""
+    USER_JWT_ISSUER: str = "https://auth.granthan.com"
+
     # ─── Startup Validation ───────────────────────────────────────────────────
     STRICT_STARTUP_VALIDATION: bool = False
 

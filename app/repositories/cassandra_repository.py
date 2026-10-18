@@ -44,6 +44,21 @@ class CassandraRepository:
         """)
 
         # ─── Summary DML ─────────────────────────────────────────────────────
+        self._get_memory_settings = self.session.prepare(
+            "SELECT memory_enabled FROM user_memory_settings WHERE user_id = ?"
+        )
+        self._set_memory_settings = self.session.prepare(
+            "INSERT INTO user_memory_settings (user_id, memory_enabled, updated_at) VALUES (?, ?, ?)"
+        )
+        self._add_tombstone = self.session.prepare(
+            "INSERT INTO user_fact_tombstones (user_id, statement_hash, deleted_at) VALUES (?, ?, ?)"
+        )
+        self._get_tombstones = self.session.prepare(
+            "SELECT statement_hash FROM user_fact_tombstones WHERE user_id = ?"
+        )
+        self._get_fact = self.session.prepare(
+            "SELECT * FROM user_facts WHERE user_id = ? AND category = ? AND fact_id = ?"
+        )
         self._get_summary = self.session.prepare("""
             SELECT conversation_id, summary_text, summary_version,
                    model_name, model_version, generated_at
@@ -256,6 +271,28 @@ class CassandraRepository:
     def delete_fact(self, user_id: str, category: str, fact_id: uuid.UUID) -> None:
         """Removes a specific user fact."""
         self.session.execute(self._delete_fact, (user_id, category, fact_id))
+
+    def get_fact(self, user_id: str, category: str, fact_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """One fact, looked up inside the user's own partition (so it can never return
+        another user's fact)."""
+        row = self.session.execute(self._get_fact, (user_id, category, fact_id)).one()
+        return row._asdict() if row else None
+
+    # ─── User memory controls ───────────────────────────────────────────────
+
+    def get_memory_enabled(self, user_id: str) -> Optional[bool]:
+        """None when the user never changed the setting."""
+        row = self.session.execute(self._get_memory_settings, (user_id,)).one()
+        return None if row is None else row.memory_enabled
+
+    def set_memory_enabled(self, user_id: str, enabled: bool) -> None:
+        self.session.execute(self._set_memory_settings, (user_id, enabled, datetime.now(timezone.utc)))
+
+    def add_fact_tombstone(self, user_id: str, statement_hash: str) -> None:
+        self.session.execute(self._add_tombstone, (user_id, statement_hash, datetime.now(timezone.utc)))
+
+    def get_fact_tombstones(self, user_id: str) -> set:
+        return {row.statement_hash for row in self.session.execute(self._get_tombstones, (user_id,))}
 
     # ─── Outbox Operations ───────────────────────────────────────────────────
 

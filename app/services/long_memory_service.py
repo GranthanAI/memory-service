@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.services.memory_controls import MemoryControls, statement_hash
 from app.core.config import settings
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.milvus_repository import MilvusRepository
@@ -27,6 +28,7 @@ class LongMemoryService:
     def __init__(self, cassandra_repo: CassandraRepository, milvus_repo: MilvusRepository):
         self.cassandra_repo = cassandra_repo
         self.milvus_repo = milvus_repo
+        self.controls = MemoryControls(cassandra_repo)
 
     async def merge_user_facts(
         self,
@@ -48,6 +50,21 @@ class LongMemoryService:
 
         if not incoming_facts:
             return stats
+
+        # User controls (enforced here, the only place facts are written): a paused
+        # memory stores nothing, and statements the user deleted/corrected are never
+        # re-learned.
+        if not self.controls.is_enabled(user_id):
+            logger.info(f"Memory is off for user {user_id}; not storing {len(incoming_facts)} fact(s).")
+            stats["skipped"] += len(incoming_facts)
+            return stats
+        forgotten = self.controls.tombstones(user_id)
+        if forgotten:
+            kept = [f for f in incoming_facts if statement_hash(f["statement"]) not in forgotten]
+            stats["skipped"] += len(incoming_facts) - len(kept)
+            incoming_facts = kept
+            if not incoming_facts:
+                return stats
 
         # Group incoming facts by category to minimize database queries
         categories = set(f["category"] for f in incoming_facts)

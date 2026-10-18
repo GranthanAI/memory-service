@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.repositories.memory_repository import MemoryRepository
 from app.repositories.milvus_repository import MilvusRepository
 from app.services.ranking_service import RankingService
+from app.services.memory_controls import MemoryControls, statement_hash
 
 logger = logging.getLogger("memory_service.services.retrieval_service")
 
@@ -21,9 +22,13 @@ class RetrievalService:
     Orchestrates high-speed read-through queries for conversation state and semantic facts.
     """
 
-    def __init__(self, memory_repo: MemoryRepository, milvus_repo: MilvusRepository):
+    def __init__(self, memory_repo: MemoryRepository, milvus_repo: MilvusRepository,
+                 controls: Optional[MemoryControls] = None):
         self.memory_repo = memory_repo
         self.milvus_repo = milvus_repo
+        # User memory controls (pause / forgotten statements). Required in production
+        # wiring (container); optional only for older callers/tests.
+        self.controls = controls
 
     async def get_or_hydrate_snapshot(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -69,6 +74,8 @@ class RetrievalService:
         Retrieves closest facts for a user from Milvus, then scores and ranks them
         using the Decoupled Scoring & Ranking Engine.
         """
+        if self.controls is not None and not self.controls.is_enabled(user_id):
+            return []  # memory paused: saved memories are not used in answers
         try:
             # 1. Fetch from Milvus scoped to user
             hits = self.milvus_repo.search_facts(
@@ -78,6 +85,14 @@ class RetrievalService:
             )
             if not hits:
                 return []
+            # A memory the user deleted must never be used, even if its vector delete
+            # had not completed (belt and braces next to the delete ordering).
+            if self.controls is not None:
+                forgotten = self.controls.tombstones(user_id)
+                if forgotten:
+                    hits = [h for h in hits if statement_hash(h.get("statement") or "") not in forgotten]
+                    if not hits:
+                        return []
 
             # 2. Score and rank using RankingService
             ranked = RankingService.rank_facts(hits, limit=limit)

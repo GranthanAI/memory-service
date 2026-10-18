@@ -76,11 +76,25 @@ class Migration3_AddCreatedAtToProcessingIndex(Migration):
         ))
 
 
+class Migration4_UserMemoryControls(Migration):
+    """Migration 4: user-facing memory controls - per-user memory on/off
+    (user_memory_settings) and tombstones for deleted/corrected memories
+    (user_fact_tombstones). Both CREATE TABLE IF NOT EXISTS, so re-running is safe."""
+    version = 4
+    description = "Add user_memory_settings and user_fact_tombstones tables"
+
+    def upgrade(self, session) -> None:
+        from app.db.cassandra import _USER_CONTROLS_DDL
+        for ddl in _USER_CONTROLS_DDL:
+            session.execute(SimpleStatement(ddl.strip()))
+
+
 # List of all migrations in chronological order
 MIGRATIONS: list[Migration] = [
     Migration1_InitialSchema(),
     Migration2_AddSnapshotMetadata(),
     Migration3_AddCreatedAtToProcessingIndex(),
+    Migration4_UserMemoryControls(),
 ]
 
 
@@ -147,7 +161,9 @@ class MigrationManager:
             "outbox_processing_index": ["claimed_date", "claimed_at", "job_id", "created_at"],
             "retry_jobs": ["status", "next_retry", "job_id", "payload"],
             "user_facts": ["user_id", "category", "fact_id", "statement", "importance"],
-            "conversation_recent_messages": ["conversation_id", "message_id", "content"]
+            "conversation_recent_messages": ["conversation_id", "message_id", "content"],
+            "user_memory_settings": ["user_id", "memory_enabled"],
+            "user_fact_tombstones": ["user_id", "statement_hash"],
         }
 
         for table_name, columns in expected_tables.items():
