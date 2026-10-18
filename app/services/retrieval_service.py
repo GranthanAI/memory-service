@@ -16,6 +16,10 @@ from app.services.memory_controls import MemoryControls, statement_hash
 
 logger = logging.getLogger("memory_service.services.retrieval_service")
 
+STABLE_PREFERENCE_MIN_IMPORTANCE = 0.7
+STABLE_PREFERENCE_LIMIT = 3
+STABLE_PREFERENCE_BASELINE_SIMILARITY = 0.4
+
 
 class RetrievalService:
     """
@@ -64,6 +68,37 @@ class RetrievalService:
             logger.error(f"Error fetching summary for conversation {conversation_id}: {e}")
             return None
 
+    def _stable_preferences(self, user_id: str, already: set) -> List[Dict[str, Any]]:
+        """Top stored preferences that are important enough to apply to any request."""
+        try:
+            rows = self.milvus_repo.list_user_facts(user_id)
+        except Exception:
+            return []
+        if not isinstance(rows, list):
+            return []
+        stable = [
+            r for r in rows
+            if r.get("category") == "preferences"
+            and float(r.get("importance") or 0) >= STABLE_PREFERENCE_MIN_IMPORTANCE
+            and r.get("fact_id") not in already
+        ]
+        stable.sort(key=lambda r: float(r.get("importance") or 0), reverse=True)
+        # No topical similarity: a neutral baseline lets importance and recency decide the rank.
+        return [dict(r, distance=STABLE_PREFERENCE_BASELINE_SIMILARITY) for r in stable[:STABLE_PREFERENCE_LIMIT]]
+
+    @staticmethod
+    def _within_budget(ranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keeps the best-ranked facts that fit the character budget for injected memory."""
+        kept: List[Dict[str, Any]] = []
+        used = 0
+        for fact in ranked:
+            size = len(str(fact.get("statement") or ""))
+            if kept and used + size > settings.RETRIEVAL_FACT_CHAR_BUDGET:
+                continue
+            used += size
+            kept.append(fact)
+        return kept
+
     async def retrieve_relevant_facts(
         self,
         user_id: str,
@@ -83,6 +118,12 @@ class RetrievalService:
                 query_vector=query_vector,
                 limit=limit
             )
+            # Nearest-neighbour search always returns *something*: facts that are not actually about this
+            # request are dropped so unrelated memories are not injected into the prompt.
+            hits = [h for h in (hits or []) if float(h.get("distance") or 0.0) >= settings.RETRIEVAL_MIN_SIMILARITY]
+            # Stable preferences (how the user likes answers) apply whatever the topic, so they are
+            # offered even when they are not semantically close to this question.
+            hits.extend(self._stable_preferences(user_id, {h.get("fact_id") for h in hits}))
             if not hits:
                 return []
             # A memory the user deleted must never be used, even if its vector delete
@@ -96,7 +137,7 @@ class RetrievalService:
 
             # 2. Score and rank using RankingService
             ranked = RankingService.rank_facts(hits, limit=limit)
-            return ranked
+            return self._within_budget(ranked)
         except Exception as e:
             logger.error(f"Error retrieving relevant facts for user {user_id}: {e}")
             return []

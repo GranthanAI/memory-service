@@ -118,6 +118,8 @@ class SystemSettings(BaseSettings):
     RETRIEVAL_WEIGHT_RECENCY: float = 0.2
     RETRIEVAL_WEIGHT_IMPORTANCE: float = 0.3
     RETRIEVAL_DECAY_RATE: float = 0.05         # Exponential decay rate for recency scoring
+    RETRIEVAL_MIN_SIMILARITY: float = 0.3      # Topical facts below this cosine similarity are not injected
+    RETRIEVAL_FACT_CHAR_BUDGET: int = 1500     # Max characters of memory facts injected into a prompt
     RETRIEVAL_TOP_K_FACTS: int = 10            # Max facts to retrieve from Milvus per query
     FACT_MERGE_SIMILARITY_THRESHOLD: float = 0.85   # Above this → supersede, below → insert new
 

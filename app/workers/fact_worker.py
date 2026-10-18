@@ -130,7 +130,17 @@ class FactWorker:
 
                             # 3. Call internal LLM Service to extract facts
                             from app.schemas.llm import FactExtractRequest
-                            extract_request = FactExtractRequest(summary=summary_text)
+                            # The summary alone loses explicit statements ("remember that...", rules the user
+                            # set), so the user's own recent words are included as evidence.
+                            user_lines = [
+                                f"- {str(m['content']).strip()[:300]}"
+                                for m in chronological_messages
+                                if m.get("role") == "user" and str(m.get("content") or "").strip()
+                            ][-10:]
+                            notes = summary_text
+                            if user_lines:
+                                notes = "\n".join([summary_text, "", "The user's own recent messages:", *user_lines])
+                            extract_request = FactExtractRequest(summary=notes)
 
                             facts = await self._extract_facts(user_id, conversation_id, extract_request)
                             logger.info(f"Extracted {len(facts)} facts from conversation '{conversation_id}'.")
