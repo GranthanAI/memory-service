@@ -76,6 +76,8 @@ _DDL_STATEMENTS = [
         model_name          TEXT,
         model_version       TEXT,
         generated_at        TIMESTAMP,
+        through_message_id  TEXT,
+        through_created_at  TIMESTAMP,
         PRIMARY KEY (conversation_id)
     );
     """,

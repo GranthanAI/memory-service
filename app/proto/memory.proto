@@ -25,6 +25,15 @@ message GetMemoryContextRequest {
   MemoryScope scope = 4;      // SHORT_TERM | MEDIUM | LONG_TERM | SEMANTIC | ALL
   int32 max_tokens = 5;       // token budget for memory section
   string trace_id = 6;
+  // Branch lineage of the conversation (root first, direct parent last), as resolved by conversation-service.
+  // upto_message_id is the last message of that ancestor in scope at the branch point. Additive: absent = not a
+  // branch (or an older caller), in which case no ancestor summary is returned.
+  repeated AncestorRef ancestors = 7;
+}
+
+message AncestorRef {
+  string conversation_id = 1;
+  string upto_message_id = 2;
 }
 
 message GetShortTermMemoryRequest {
@@ -46,6 +55,16 @@ message Fact {
   float confidence = 2;
   string category = 3;
   int64 last_updated = 4;
+  string fact_id = 5;         // stable identity of the stored fact
+}
+
+// Summary of an ancestor conversation that is valid at the child's branch point: it incorporates no
+// message after upto_message_id. Summaries that go beyond the branch point are never returned.
+message AncestorSummary {
+  string conversation_id = 1;
+  string summary = 2;
+  string covers_through_message_id = 3;
+  int32 summary_version = 4;
 }
 
 message SemanticSnippet {
@@ -61,6 +80,9 @@ message GetMemoryContextResponse {
   repeated SemanticSnippet semantic_snippets = 4;
   int32 total_tokens = 5;
   string request_id = 6;
+  repeated AncestorSummary ancestor_summaries = 7;   // branch-valid, root first
+  int32 summary_version = 8;                         // version of medium_summary
+  string summary_through_message_id = 9;             // last message medium_summary incorporates
 }
 
 message GetShortTermMemoryResponse {

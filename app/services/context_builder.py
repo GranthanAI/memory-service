@@ -7,6 +7,7 @@ conversation summaries, ancestor lineages, and scored long-term facts concurrent
 
 import asyncio
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
@@ -14,6 +15,18 @@ from app.clients.graph_client import GraphClient
 from app.services.retrieval_service import RetrievalService
 
 logger = logging.getLogger("memory_service.services.context_builder")
+
+
+def summary_valid_at_branch(through_message_id: Optional[str], upto_message_id: Optional[str]) -> bool:
+    """True when a summary incorporates no message after the branch point.
+
+    Message ids are UUIDv7 (time-ordered, compared as 128-bit numbers). Anything unknown or unparsable is
+    treated as NOT valid: a summary whose coverage cannot be proven to end at the branch point must not be
+    shown to a child, because it could contain what the parent said afterwards."""
+    try:
+        return uuid.UUID(str(through_message_id)).int <= uuid.UUID(str(upto_message_id)).int
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 class ContextBuilder:
@@ -43,11 +56,54 @@ class ContextBuilder:
             )
             return [], False
 
+    def _summary_meta(self, conversation_id: str) -> Dict[str, Any]:
+        try:
+            row = self.retrieval_service.memory_repo.cassandra_repo.get_summary(conversation_id) or {}
+        except Exception:
+            return {}
+        return {"summary_version": row.get("summary_version"), "through_message_id": row.get("through_message_id")}
+
+    async def ancestor_summaries(
+        self, user_id: str, ancestors: Optional[List[Dict[str, str]]]
+    ) -> List[Dict[str, Any]]:
+        """Branch-valid summaries of the ancestors (root first). `ancestors` is [{conversation_id,
+        upto_message_id}] from conversation-service. An ancestor is skipped (never guessed) when it belongs
+        to another user, has no summary, or its summary may include messages after the branch point."""
+        out: List[Dict[str, Any]] = []
+        repo = self.retrieval_service.memory_repo
+        for ref in ancestors or []:
+            cid, upto = str(ref.get("conversation_id") or ""), ref.get("upto_message_id")
+            if not cid or not upto:
+                continue
+            try:
+                snapshot = await repo.get_snapshot(cid)
+                if not snapshot or not user_id or snapshot.get("user_id") != user_id:
+                    continue
+                row = repo.cassandra_repo.get_summary(cid)
+            except Exception as exc:
+                logger.warning(f"Ancestor summary unavailable for {cid}: {exc}")
+                continue
+            text = (row or {}).get("summary_text") or ""
+            if not text.strip():
+                continue
+            if not summary_valid_at_branch(row.get("through_message_id"), upto):
+                logger.info(f"Ancestor summary for {cid} omitted: not provably valid at the branch point.")
+                continue
+            out.append({
+                "conversation_id": cid,
+                "summary": text,
+                "covers_through_message_id": row["through_message_id"],
+                "summary_version": int(row.get("summary_version") or 0),
+            })
+        return out
+
     async def build_context(
         self,
         user_id: str,
         conversation_id: str,
-        query_vector: Optional[List[float]] = None
+        query_vector: Optional[List[float]] = None,
+        ancestors: Optional[List[Dict[str, str]]] = None,
+        use_graph_parents: bool = True,
     ) -> Dict[str, Any]:
         """
         Concurrently aggregates short-term recent messages, the active summary,
@@ -60,7 +116,9 @@ class ContextBuilder:
             conversation_id,
             limit=settings.SHORT_TERM_MESSAGE_LIMIT
         )
-        parents_task = self.get_parent_summaries(conversation_id)
+        # Graph summaries describe the parent as it is NOW, not at the branch point, so callers that supply the
+        # branch lineage (gRPC) do not use them; they get branch-valid ancestor summaries instead.
+        parents_task = self.get_parent_summaries(conversation_id) if use_graph_parents else asyncio.sleep(0, result=([], False))
 
         if query_vector:
             facts_task = self.retrieval_service.retrieve_relevant_facts(
@@ -81,6 +139,7 @@ class ContextBuilder:
         )
 
         parent_summaries, parents_available = parents_result
+        branch_summaries = await self.ancestor_summaries(user_id, ancestors) if ancestors else []
 
         # Resolve user_id if not passed initially
         resolved_user_id = user_id
@@ -112,6 +171,8 @@ class ContextBuilder:
             "current_summary": summary or "",
             "short_term_messages": messages,
             "parent_summaries": parent_summaries,
+            "ancestor_summaries": branch_summaries,
+            "summary_meta": self._summary_meta(conversation_id) if summary else {},
             "relevant_facts": facts,
             "metadata": {
                 "parent_summaries_available": parents_available,

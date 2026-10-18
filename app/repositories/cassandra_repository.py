@@ -61,7 +61,8 @@ class CassandraRepository:
         )
         self._get_summary = self.session.prepare("""
             SELECT conversation_id, summary_text, summary_version,
-                   model_name, model_version, generated_at
+                   model_name, model_version, generated_at,
+                   through_message_id, through_created_at
             FROM conversation_summaries
             WHERE conversation_id = ?
         """)
@@ -70,6 +71,22 @@ class CassandraRepository:
                 conversation_id, summary_text, summary_version,
                 model_name, model_version, generated_at
             ) VALUES (?, ?, ?, ?, ?, ?)
+        """)
+
+        # Conditional (LWT) summary writes: the summary row is the single source of truth for
+        # text + version + watermark, and a stale writer can never replace a newer one.
+        self._insert_summary_cas = self.session.prepare("""
+            INSERT INTO conversation_summaries (
+                conversation_id, summary_text, summary_version, model_name, model_version,
+                generated_at, through_message_id, through_created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS
+        """)
+        self._update_summary_cas = self.session.prepare("""
+            UPDATE conversation_summaries
+            SET summary_text = ?, summary_version = ?, model_name = ?, model_version = ?,
+                generated_at = ?, through_message_id = ?, through_created_at = ?
+            WHERE conversation_id = ?
+            IF summary_version = ?
         """)
 
         # ─── Recent Messages DML ─────────────────────────────────────────────
@@ -224,6 +241,24 @@ class CassandraRepository:
             summary["model_version"],
             summary.get("generated_at") or datetime.now(timezone.utc)
         ))
+
+    def write_summary_if_current(self, summary: Dict[str, Any], expected_version: Optional[int]) -> bool:
+        """Writes `summary` only if the stored summary is still at `expected_version` (None = no summary
+        exists yet). Returns whether it was applied; False means another writer got there first."""
+        generated_at = summary.get("generated_at") or datetime.now(timezone.utc)
+        if expected_version is None:
+            result = self.session.execute(self._insert_summary_cas, (
+                summary["conversation_id"], summary["summary_text"], summary["summary_version"],
+                summary["model_name"], summary["model_version"], generated_at,
+                summary.get("through_message_id"), summary.get("through_created_at"),
+            ))
+        else:
+            result = self.session.execute(self._update_summary_cas, (
+                summary["summary_text"], summary["summary_version"], summary["model_name"],
+                summary["model_version"], generated_at, summary.get("through_message_id"),
+                summary.get("through_created_at"), summary["conversation_id"], expected_version,
+            ))
+        return bool(result.was_applied)
 
     # ─── Recent Messages Operations ──────────────────────────────────────────
 

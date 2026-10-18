@@ -69,6 +69,7 @@ def _facts_to_proto(facts: list[dict]) -> list["memory_pb2.Fact"]:
             confidence=float(f.get("importance") or 0.0),
             category=f.get("category", ""),
             last_updated=_to_epoch_millis(f.get("created_at")),
+            fact_id=str(f.get("fact_id") or ""),
         )
         for f in facts
     ]
@@ -105,6 +106,9 @@ class MemoryContextHandler(memory_pb2_grpc.MemoryServiceServicer):
                 user_id=request.user_id,
                 conversation_id=request.conversation_id,
                 query_vector=query_vector,
+                ancestors=[{"conversation_id": a.conversation_id, "upto_message_id": a.upto_message_id}
+                           for a in request.ancestors],
+                use_graph_parents=False,
             )
 
             return memory_pb2.GetMemoryContextResponse(
@@ -114,6 +118,15 @@ class MemoryContextHandler(memory_pb2_grpc.MemoryServiceServicer):
                 semantic_snippets=[],
                 total_tokens=0,
                 request_id=trace_id,
+                summary_version=int((result.get("summary_meta") or {}).get("summary_version") or 0),
+                summary_through_message_id=str((result.get("summary_meta") or {}).get("through_message_id") or ""),
+                ancestor_summaries=[
+                    memory_pb2.AncestorSummary(
+                        conversation_id=a["conversation_id"], summary=a["summary"],
+                        covers_through_message_id=a["covers_through_message_id"], summary_version=a["summary_version"],
+                    )
+                    for a in result.get("ancestor_summaries", [])
+                ],
             )
         except Exception as e:
             logger.error(f"gRPC GetMemoryContext failed: {e}")
