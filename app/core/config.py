@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,7 +9,7 @@ class SystemSettings(BaseSettings):
     Settings are grouped by concern and match the HLD v4.1 / LLD v3.1 architecture.
     """
 
-    model_config = SettingsConfigDict(
+    model_config = SettingsConfigDict(hide_input_in_errors=True, 
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
@@ -17,6 +18,7 @@ class SystemSettings(BaseSettings):
     # ─── Application ──────────────────────────────────────────────────────────
     APP_NAME: str = "graphgpt-memory-service"
     APP_ENV: str = "production"
+    ENVIRONMENT: str = "development"   # "production" turns on the fail-fast secret checks below
     DEBUG: bool = False
     HTTP_HOST: str = "0.0.0.0"
     HTTP_PORT: int = 8000
@@ -142,4 +144,28 @@ class SystemSettings(BaseSettings):
 
 
 # Singleton — import this everywhere
+
+    @model_validator(mode="after")
+    def _fail_fast_on_unsafe_production_config(self):
+        """In production the service refuses to start with a development default or a weak secret (a known default
+        would let anyone forge tokens). Development and test environments are unaffected. Secret VALUES are never
+        included in the error message."""
+        if self.ENVIRONMENT.strip().lower() not in ("production", "prod"):
+            return self
+        dev_values = {"supersecretjwtkeyforauthservicelocaldvelopment12345", "graphgpt-jwt-secret", "graphgpt-memory-secret", "changeme", "secret"}
+        problems: list[str] = []
+
+        def secret(name: str, value: str) -> None:
+            if not value or value in dev_values or len(value) < 32:
+                problems.append(f"{name} must be set to a unique secret of at least 32 characters")
+        secret("API_KEY", self.API_KEY)
+        secret("JWT_SECRET_KEY", self.JWT_SECRET_KEY)
+        secret("USER_JWT_SECRET_KEY", self.USER_JWT_SECRET_KEY)
+        if self.DEBUG:
+            problems.append("DEBUG must be false")
+        if problems:
+            raise ValueError("Unsafe production configuration: " + "; ".join(problems))
+        return self
+
+
 settings = SystemSettings()
