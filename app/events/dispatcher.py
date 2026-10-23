@@ -15,6 +15,7 @@ from app.repositories.processed_event_repository import ProcessedEventRepository
 from app.repositories.memory_repository import MemoryRepository
 from app.services.snapshot_service import SnapshotService
 from app.core.config import settings
+from app.core.metrics import COMPACTION_REQUESTS
 
 logger = logging.getLogger("memory_service.events.dispatcher")
 
@@ -30,12 +31,15 @@ class EventDispatcher:
         processed_event_repo: ProcessedEventRepository,
         memory_repo: MemoryRepository,
         snapshot_service: SnapshotService,
-        summary_threshold: int = 20
+        summary_threshold: int = 20,
+        scheduler=None,
     ):
         self.processed_event_repo = processed_event_repo
         self.memory_repo = memory_repo
         self.snapshot_service = snapshot_service
         self.summary_threshold = summary_threshold
+        # Optional CompactionScheduler: adds the context-pressure trigger next to the original every-N-messages rule.
+        self.scheduler = scheduler
 
     async def dispatch(self, raw_event: Dict[str, Any]) -> None:
         """
@@ -86,7 +90,20 @@ class EventDispatcher:
         outbox_topic = None
         outbox_payload = None
 
+        reason = None
+        pending_messages, pending_tokens = (0, 0)
+        if self.scheduler is not None:
+            pending_messages, pending_tokens = await self.scheduler.note_message(conversation_id, message["content"] or "")
         if snapshot["message_count"] % self.summary_threshold == 0:
+            reason = "count"                                          # the original rule: always honoured
+            if self.scheduler is not None:
+                await self.scheduler.claim(conversation_id)           # a pressure request must not duplicate this one
+        elif (self.scheduler is not None and self.scheduler.pressure_due(pending_messages, pending_tokens)
+              and await self.scheduler.claim(conversation_id)):
+            reason = "pressure"
+
+        if reason:
+            COMPACTION_REQUESTS.labels(reason=reason).inc()
             snapshot["state"] = MemoryState.SUMMARY_PENDING.value
             outbox_topic = settings.KAFKA_SUMMARY_TOPIC
             outbox_payload = {

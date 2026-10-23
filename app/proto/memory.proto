@@ -83,6 +83,9 @@ message GetMemoryContextResponse {
   repeated AncestorSummary ancestor_summaries = 7;   // branch-valid, root first
   int32 summary_version = 8;                         // version of medium_summary
   string summary_through_message_id = 9;             // last message medium_summary incorporates
+  // Older ORIGINAL messages of this conversation that match the current question (exact text, oldest first), for
+  // details a summary may have lost. Only this conversation's own messages; empty when nothing qualifies. Additive.
+  repeated Message retrieved_history = 10;
 }
 
 message GetShortTermMemoryResponse {

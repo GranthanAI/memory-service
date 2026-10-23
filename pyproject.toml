@@ -12,6 +12,7 @@ fastapi = "^0.109.0"
 uvicorn = "^0.27.0"
 aiokafka = "^0.10.0"
 cramjam = "^2.8.0"
+tiktoken = "^0.7.0"                    # token counting for summary validation (same cl100k encoding as llm-service)
 redis = {extras = ["hiredis"], version = "^5.0.1"}
 pymilvus = "^2.3.5"
 cassandra-driver = "^3.29.0"          # Primary source of truth — Cassandra

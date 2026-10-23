@@ -17,6 +17,7 @@ from app.clients.embedding_client import EmbeddingClient
 from app.core.logging import clear_log_context, set_log_context
 from app.proto import memory_pb2, memory_pb2_grpc
 from app.services.context_builder import ContextBuilder
+from app.services.summary_service import message_key
 
 logger = logging.getLogger("memory_service.proto.memory_handlers")
 
@@ -109,10 +110,12 @@ class MemoryContextHandler(memory_pb2_grpc.MemoryServiceServicer):
                 ancestors=[{"conversation_id": a.conversation_id, "upto_message_id": a.upto_message_id}
                            for a in request.ancestors],
                 use_graph_parents=False,
+                query_text=request.query or None,
             )
 
             return memory_pb2.GetMemoryContextResponse(
                 short_term_messages=_messages_to_proto(result.get("short_term_messages", [])),
+                retrieved_history=_messages_to_proto(result.get("retrieved_history", [])),
                 medium_summary=result.get("current_summary") or "",
                 long_term_facts=_facts_to_proto(result.get("relevant_facts", [])),
                 semantic_snippets=[],
@@ -147,8 +150,9 @@ class MemoryContextHandler(memory_pb2_grpc.MemoryServiceServicer):
                 limit=request.limit or 20,
             )
 
+            # the stores return the window newest-first; callers read history oldest-first
             return memory_pb2.GetShortTermMemoryResponse(
-                messages=_messages_to_proto(messages),
+                messages=_messages_to_proto(sorted(messages, key=message_key)),
                 total_tokens=0,
                 request_id=trace_id,
             )

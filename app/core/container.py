@@ -27,7 +27,9 @@ from app.services.summary_service import SummaryService
 from app.services.long_memory_service import LongMemoryService
 from app.services.ranking_service import RankingService
 from app.services.retrieval_service import RetrievalService
+from app.services.compaction_scheduler import CompactionScheduler
 from app.services.context_builder import ContextBuilder
+from app.services.history_search import HistorySearch
 from app.services.llm_service import LLMService
 from app.proto.server import GRPCServer
 from app.factories.llm_factory import LLMFactory
@@ -133,7 +135,9 @@ class Container:
         self.llm_service = LLMService(self.llm_manager)
         self.snapshot_service = SnapshotService(self.cassandra_session, self.redis_repo)
         self.memory_service = MemoryService(self.memory_repo, self.cassandra_repo)
-        self.summary_service = SummaryService(self.memory_repo, self.cassandra_repo, self.llm_service)
+        self.compaction_scheduler = CompactionScheduler(self.redis_client, self.cassandra_repo)
+        self.summary_service = SummaryService(self.memory_repo, self.cassandra_repo, self.llm_service,
+                                              scheduler=self.compaction_scheduler)
         self.long_memory_service = LongMemoryService(self.cassandra_repo, self.milvus_repo)
         self.ranking_service = RankingService()
 
@@ -152,7 +156,9 @@ class Container:
         )
         self.context_builder = ContextBuilder(
             retrieval_service=self.retrieval_service,
-            graph_client=self.graph_client
+            graph_client=self.graph_client,
+            scheduler=self.compaction_scheduler,
+            history_search=HistorySearch(self.cassandra_repo),
         )
 
         # Wire combined gRPC server: internal LLM Service (summarization/fact
@@ -179,6 +185,7 @@ class Container:
             memory_repo=self.memory_repo,
             snapshot_service=self.snapshot_service,
             summary_threshold=settings.SUMMARY_THRESHOLD,
+            scheduler=self.compaction_scheduler,
         )
 
         self.memory_update_worker = MemoryUpdateWorker(dispatcher=self.event_dispatcher)

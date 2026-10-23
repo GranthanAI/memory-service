@@ -16,10 +16,13 @@ from app.core.metrics import LLM_LATENCY, LLM_REQUESTS, LLM_TOKENS
 from app.managers.llm_manager import LLMManager
 from app.prompts.fact_prompt import FACT_SYSTEM_PROMPT, FACT_USER_PROMPT_TEMPLATE
 from app.prompts.summary_prompt import (
+    SUMMARY_CONSOLIDATE_SYSTEM_PROMPT,
+    SUMMARY_CONSOLIDATE_USER_PROMPT_TEMPLATE,
     SUMMARY_SYSTEM_PROMPT,
     SUMMARY_USER_PROMPT_TEMPLATE,
 )
 from app.schemas.llm import (
+    ConsolidateSummaryRequest,
     ExtractedFact,
     FactExtractRequest,
     FactExtractResponse,
@@ -90,6 +93,27 @@ class LLMService:
 
         summary_clean = summary_raw.strip()
         return SummarizeResponse(summary=summary_clean)
+
+    async def consolidate_summary(self, request: ConsolidateSummaryRequest) -> SummarizeResponse:
+        """Rewrites an existing summary shorter, through the same provider path as summarize(). Raises on failure: the
+        caller (SummaryService) owns the fallback, so the token limit can never be bypassed."""
+        target = request.target_tokens
+        messages = [
+            {"role": "system", "content": SUMMARY_CONSOLIDATE_SYSTEM_PROMPT.format(
+                target_tokens=target, target_words=max(1, int(target * 0.7)))},
+            {"role": "user", "content": SUMMARY_CONSOLIDATE_USER_PROMPT_TEMPLATE.format(
+                summary=request.summary, target_tokens=target)},
+        ]
+        start_time = time.monotonic()
+        try:
+            raw = await self.llm_manager.generate_with_retry(messages, max_tokens=int(target * 1.4) + 64)
+            LLM_LATENCY.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="consolidate_summary").observe(
+                time.monotonic() - start_time)
+            LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="consolidate_summary", status="success").inc()
+        except Exception:
+            LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="consolidate_summary", status="failure").inc()
+            raise
+        return SummarizeResponse(summary=(raw or "").strip())
 
     async def extract_facts(self, request: FactExtractRequest) -> FactExtractResponse:
         """

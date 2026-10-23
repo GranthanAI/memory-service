@@ -82,3 +82,9 @@ class FactExtractResponse(BaseModel):
         default_factory=list,
         description="List of extracted structured facts."
     )
+
+
+class ConsolidateSummaryRequest(BaseModel):
+    """Shorten/consolidate an existing summary to at most `target_tokens` (adds no new information)."""
+    summary: str = Field(..., description="The summary text to consolidate.")
+    target_tokens: int = Field(..., ge=1, description="Upper bound for the rewritten summary, in tokens.")

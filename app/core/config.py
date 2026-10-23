@@ -133,6 +133,34 @@ class SystemSettings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 1024
+
+    # ─── Automatic conversation-memory compaction (no user-facing setting) ────────────────────────────────────────
+    # A summary is requested when ANY of: SUMMARY_THRESHOLD messages arrived since the last one (the original rule), or
+    # at least COMPACTION_MIN_NEW_MESSAGES new messages carry COMPACTION_TRIGGER_TOKENS tokens (long messages build up
+    # context pressure much faster than 20 short ones). One request per conversation is in flight at a time.
+    COMPACTION_TRIGGER_TOKENS: int = 6000
+    COMPACTION_MIN_NEW_MESSAGES: int = 6
+    COMPACTION_INFLIGHT_TTL_SECONDS: int = 120
+    COMPACTION_PENDING_TTL_SECONDS: int = 604800
+    # A summary is validated in TOKENS with the real tokenizer. The default equals the previous fixed limit
+    # (6000 characters ~ 1500 tokens), so nothing changes unless an operator changes it.
+    SUMMARY_MAX_TOKENS: int = 1500
+    SUMMARY_MAX_REFINEMENTS: int = 1                    # extra, shorter attempts when a summary is over the limit
+    SUMMARY_CONSOLIDATE_RATIO: float = 0.85             # at/above this share of the limit the summary is consolidated
+    SUMMARY_CONSOLIDATE_TARGET_RATIO: float = 0.65
+    SUMMARY_PROMPT_VERSION: str = "2"
+    # Context assembly: what stays verbatim next to a summary, and how far back a stale summary is bridged.
+    CONTEXT_MIN_VERBATIM_MESSAGES: int = 6
+    CONTEXT_MAX_UNSUMMARIZED_MESSAGES: int = 120
+    CONTEXT_STALE_MESSAGES: int = 40                    # uncovered messages beyond this = the summary is stale
+    # Question-aware retrieval of older ORIGINAL messages of the same conversation (lexical, no new index).
+    HISTORY_SEARCH_ENABLED: bool = False                # OFF until llm-service renders retrieved_history in the prompt
+    HISTORY_SEARCH_MAX_MESSAGES: int = 400
+    HISTORY_SEARCH_TOP_K: int = 3
+    HISTORY_SEARCH_MIN_COVERAGE: float = 0.5            # share of the question's distinctive terms a hit must contain
+    HISTORY_SEARCH_RECALL_MIN_COVERAGE: float = 0.25    # ... when the question explicitly asks about earlier content
+    HISTORY_RESULT_MAX_TOKENS: int = 350                # per excerpt
+    HISTORY_TOTAL_MAX_TOKENS: int = 1000                # all excerpts together
     # Combined gRPC server port: serves both the internal LLM Service
     # (summarization/fact-extraction) and the Memory Context Service
     # (GetMemoryContext/GetShortTermMemory, consumed by llm-service's
@@ -144,6 +172,20 @@ class SystemSettings(BaseSettings):
 
 
 # Singleton — import this everywhere
+
+    @model_validator(mode="after")
+    def _validate_compaction(self):
+        if self.COMPACTION_TRIGGER_TOKENS < 500 or self.COMPACTION_MIN_NEW_MESSAGES < 1:
+            raise ValueError("COMPACTION_TRIGGER_TOKENS must be >= 500 and COMPACTION_MIN_NEW_MESSAGES >= 1")
+        if self.SUMMARY_MAX_TOKENS < 200 or self.SUMMARY_MAX_REFINEMENTS < 0:
+            raise ValueError("SUMMARY_MAX_TOKENS must be >= 200 and SUMMARY_MAX_REFINEMENTS >= 0")
+        if not 0.0 < self.SUMMARY_CONSOLIDATE_TARGET_RATIO < self.SUMMARY_CONSOLIDATE_RATIO <= 1.0:
+            raise ValueError("SUMMARY_CONSOLIDATE_* ratios must satisfy 0 < target < ratio <= 1")
+        if self.CONTEXT_MIN_VERBATIM_MESSAGES < 1 or self.CONTEXT_MAX_UNSUMMARIZED_MESSAGES < self.SHORT_TERM_MESSAGE_LIMIT:
+            raise ValueError("CONTEXT_MIN_VERBATIM_MESSAGES must be >= 1 and CONTEXT_MAX_UNSUMMARIZED_MESSAGES >= SHORT_TERM_MESSAGE_LIMIT")
+        if not 0.0 < self.HISTORY_SEARCH_RECALL_MIN_COVERAGE <= self.HISTORY_SEARCH_MIN_COVERAGE <= 1.0:
+            raise ValueError("HISTORY_SEARCH coverage thresholds must satisfy 0 < recall <= default <= 1")
+        return self
 
     @model_validator(mode="after")
     def _fail_fast_on_unsafe_production_config(self):

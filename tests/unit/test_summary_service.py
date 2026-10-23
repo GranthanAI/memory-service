@@ -183,8 +183,8 @@ async def test_model_failure_leaves_the_previous_summary_intact():
     assert repo.snapshot["summary_version"] == 0
 
 
-@pytest.mark.parametrize("bad", ["", "   \n", None, "x" * 6001])
-async def test_malformed_model_output_is_rejected_and_nothing_is_written(bad):
+@pytest.mark.parametrize("bad", ["", "   \n", None])
+async def test_empty_model_output_is_rejected_and_nothing_is_written(bad):
     async def respond(_):
         return SimpleNamespace(summary=bad)
 

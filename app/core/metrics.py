@@ -102,3 +102,53 @@ LLM_TOKENS = Counter(
     "Total tokens consumed by LLM operations, labeled by type (prompt, completion)",
     ["type"],
 )
+
+# ─── Automatic conversation-memory compaction and context assembly (bounded labels only) ───────────────────────
+
+COMPACTION_REQUESTS = Counter(
+    "memory_compaction_requests_total",
+    "Summary (compaction) requests scheduled, by what triggered them",
+    ["reason"],      # count | pressure | stale_read | deduplicated
+)
+COMPACTION_RESULTS = Counter(
+    "memory_compaction_results_total",
+    "Outcome of one summary update",
+    ["outcome"],     # committed | nothing_new | refined | consolidated | fallback_trimmed | failed | lost_race
+)
+COMPACTION_SECONDS = Histogram(
+    "memory_compaction_seconds",
+    "Duration of one summary update (all model calls included)",
+    buckets=(0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0),
+)
+COMPACTION_SOURCE_MESSAGES = Histogram(
+    "memory_compaction_source_messages",
+    "Messages folded into the summary by one update",
+    buckets=(1, 5, 10, 20, 40, 80, 200),
+)
+SUMMARY_TOKENS = Histogram(
+    "memory_summary_tokens",
+    "Token count of a committed summary",
+    buckets=(100, 250, 500, 750, 1000, 1500, 2000),
+)
+SUMMARY_STALE = Counter(
+    "memory_summary_stale_total",
+    "Context builds where many messages were not yet covered by the summary",
+)
+CONTEXT_COVERED_SKIPPED = Counter(
+    "memory_context_covered_messages_skipped_total",
+    "Window messages not re-sent because the summary already covers them",
+)
+CONTEXT_GAP_CLOSED = Counter(
+    "memory_context_gap_closed_total",
+    "Context builds that read messages back from durable storage because neither the summary nor the window had them",
+)
+HISTORY_SEARCH = Counter(
+    "memory_history_search_total",
+    "Searches of older original messages for the current question",
+    ["outcome"],     # hit | miss | skipped | error
+)
+HISTORY_SEARCH_SECONDS = Histogram(
+    "memory_history_search_seconds",
+    "Duration of one older-message search",
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
