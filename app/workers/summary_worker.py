@@ -99,8 +99,10 @@ class SummaryWorker:
                             )
 
                             # 2. Call SummaryService to execute Incremental Summarization
+                            # A branch request bounds the summary at the branch message (payload.upto_message_id).
+                            bounds = {"upto_message_id": payload["upto_message_id"]} if payload.get("upto_message_id") else {}
                             updated_snap = await self.summary_service.process_incremental_summary(
-                                conversation_id
+                                conversation_id, **bounds
                             )
 
                             # 3. Transition snapshot to FACT_PENDING

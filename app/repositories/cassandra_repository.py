@@ -90,6 +90,21 @@ class CassandraRepository:
             IF summary_version = ?
         """)
 
+        # Immutable summary history (see Migration7): a superseded summary is archived before it is overwritten.
+        self._archive_summary_version = self.session.prepare("""
+            INSERT INTO conversation_summary_versions (
+                conversation_id, summary_version, summary_text, through_message_id, through_created_at,
+                model_name, model_version, llm_provider, prompt_version, generated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS
+        """)
+        self._list_summary_versions = self.session.prepare("""
+            SELECT conversation_id, summary_version, summary_text, through_message_id, through_created_at,
+                   model_name, model_version, llm_provider, prompt_version, generated_at
+            FROM conversation_summary_versions
+            WHERE conversation_id = ?
+            LIMIT ?
+        """)
+
         # Column-scoped snapshot writes. A whole-row upsert of a snapshot read earlier overwrites counters that other
         # writers bumped in between (the dispatcher's message_count / snapshot_version), so writers that own only a few
         # columns touch only those.
@@ -238,6 +253,18 @@ class CassandraRepository:
             snapshot.get("last_summary_msg_id"),
             snapshot.get("updated_at") or datetime.now(timezone.utc)
         ))
+
+    def archive_summary_version(self, row: Dict[str, Any]) -> None:
+        """Archives a summary row (idempotent: IF NOT EXISTS, so an archived version is never rewritten)."""
+        self.session.execute(self._archive_summary_version, (
+            row["conversation_id"], int(row.get("summary_version") or 0), row.get("summary_text") or "",
+            row.get("through_message_id"), row.get("through_created_at"), row.get("model_name"),
+            row.get("model_version"), row.get("llm_provider"), row.get("prompt_version"), row.get("generated_at"),
+        ))
+
+    def list_summary_versions(self, conversation_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Archived versions, newest first."""
+        return [r._asdict() for r in self.session.execute(self._list_summary_versions, (conversation_id, limit))]
 
     def update_snapshot_summary_fields(
         self, conversation_id: str, summary_version: int, last_summary_msg_id: Optional[str]

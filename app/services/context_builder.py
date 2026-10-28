@@ -15,41 +15,10 @@ from app.core.metrics import CONTEXT_COVERED_SKIPPED, CONTEXT_GAP_CLOSED, SUMMAR
 from app.services.summary_service import _as_utc, message_key
 from app.clients.graph_client import GraphClient
 from app.services.retrieval_service import RetrievalService
-from app.utils.message_ids import is_uuid7, uuid7_unix_ms
+from app.services.branch_validity import summary_valid_at_branch  # noqa: F401  (re-exported)
+from app.utils.token_counter import TokenCounter
 
 logger = logging.getLogger("memory_service.services.context_builder")
-
-
-def summary_valid_at_branch(
-    through_message_id: Optional[str],
-    upto_message_id: Optional[str],
-    through_created_at: Any = None,
-) -> bool:
-    """True when a summary incorporates no message after the branch point (`upto_message_id`, inclusive).
-
-    Two kinds of watermark exist:
-      * UUIDv7 (events that carried the real conversation-service ids): both ids are time-ordered, so the
-        millisecond timestamps are compared. Inside one millisecond the order of two v7 ids is random, so equality
-        of the whole id is the only thing that proves the summary ends at the branch point.
-      * uuid5 (legacy events): the id carries no order at all, so it must not be compared with a v7 id. Instead the
-        watermark message's `through_created_at` is compared with the time encoded in `upto_message_id`. That
-        timestamp is when the turn was PUBLISHED, i.e. at or after the messages were created, so it is accepted only
-        when strictly earlier than the branch message (a summary through the very latest legacy turn is therefore
-        rejected: not provable).
-    Anything unknown or unparsable is NOT valid: a summary whose coverage cannot be proven to end at the branch
-    point must not be shown to a child, because it could contain what the parent said afterwards."""
-    upto_ms = uuid7_unix_ms(upto_message_id)
-    if upto_ms is None:
-        return False
-    if is_uuid7(through_message_id):
-        through_ms = uuid7_unix_ms(through_message_id)
-        if through_ms != upto_ms:
-            return through_ms < upto_ms
-        return str(through_message_id).lower() == str(upto_message_id).lower()
-    created = _as_utc(through_created_at)
-    if created is None:
-        return False
-    return int(created.timestamp() * 1000) < upto_ms
 
 
 class ContextBuilder:
@@ -122,23 +91,79 @@ class ContextBuilder:
                 snapshot = await repo.get_snapshot(cid)
                 if not snapshot or not user_id or snapshot.get("user_id") != user_id:
                     continue
-                row = repo.cassandra_repo.get_summary(cid)
+                candidates = self._summary_candidates(repo.cassandra_repo, cid)
             except Exception as exc:
                 logger.warning(f"Ancestor summary unavailable for {cid}: {exc}")
                 continue
-            text = (row or {}).get("summary_text") or ""
-            if not text.strip():
+            # The parent may have kept summarizing after the branch was made. Its CURRENT summary then includes what the
+            # child must not see, but an earlier version (archived before it was replaced) can still be valid at the
+            # branch point: use the latest such version.
+            row = next((c for c in candidates
+                        if (c.get("summary_text") or "").strip()
+                        and summary_valid_at_branch(c.get("through_message_id"), upto, c.get("through_created_at"))), None)
+            if row is None:
+                logger.info(f"Ancestor summary for {cid} omitted: no version is provably valid at the branch point.")
                 continue
-            if not summary_valid_at_branch(row.get("through_message_id"), upto, row.get("through_created_at")):
-                logger.info(f"Ancestor summary for {cid} omitted: not provably valid at the branch point.")
-                continue
+            text, covers = row["summary_text"], row.get("through_message_id") or ""
+            bridge, last_bridged = self._bridge(repo.cassandra_repo, cid, row, upto)
+            if bridge:
+                text, covers = f"{text}\n\n{bridge}", last_bridged or covers
             out.append({
                 "conversation_id": cid,
                 "summary": text,
-                "covers_through_message_id": row["through_message_id"],
+                "covers_through_message_id": covers,
                 "summary_version": int(row.get("summary_version") or 0),
             })
         return out
+
+    @staticmethod
+    def _summary_candidates(cassandra_repo, cid: str) -> List[Dict[str, Any]]:
+        """The current summary row followed by archived versions, newest first (one entry per version)."""
+        current = cassandra_repo.get_summary(cid)
+        archived_fn = getattr(cassandra_repo, "list_summary_versions", None)
+        archived = archived_fn(cid, settings.ANCESTOR_VERSION_LOOKBACK) if archived_fn else []
+        seen, out = set(), []
+        for row in ([current] if current else []) + sorted(
+                archived or [], key=lambda r: int(r.get("summary_version") or 0), reverse=True):
+            version = int(row.get("summary_version") or 0)
+            if version not in seen:
+                seen.add(version)
+                out.append(row)
+        return out
+
+    @staticmethod
+    def _bridge(cassandra_repo, cid: str, summary_row: Dict[str, Any], upto: str):
+        """Raw messages of the ancestor after the chosen summary's watermark and up to the branch point, newest kept
+        within ANCESTOR_BRIDGE_MAX_TOKENS: they close the gap between an older summary version and the branch point.
+        Returns (text, id of the last bridged message)."""
+        try:
+            fetched = cassandra_repo.get_recent_messages(cid, limit=settings.ANCESTOR_BRIDGE_FETCH_LIMIT)
+        except Exception as exc:
+            logger.warning(f"Could not read the bridge messages for {cid}: {type(exc).__name__}")
+            return "", ""
+        mark_id = summary_row.get("through_message_id")
+        mark_created = _as_utc(summary_row.get("through_created_at"))
+        mark = (mark_created, str(mark_id)) if mark_created is not None and mark_id else None
+        if mark is None:
+            return "", ""
+        between = sorted(
+            (m for m in fetched
+             if message_key(m) > mark
+             and summary_valid_at_branch(m.get("message_id"), upto, m.get("created_at"))),
+            key=message_key)
+        if not between:
+            return "", ""
+        counter, budget, kept, used = TokenCounter(), settings.ANCESTOR_BRIDGE_MAX_TOKENS, [], 0
+        for m in reversed(between):                                  # newest first: those are closest to the branch point
+            line = f"[{m.get('role')}] {' '.join(str(m.get('content') or '').split())[:600]}"
+            cost = counter.count(line) + 2
+            if kept and used + cost > budget:
+                break
+            kept.append((m, line))
+            used += cost
+        kept.reverse()
+        header = "Messages after the summary above, up to the branch point (verbatim, oldest first):"
+        return header + "\n" + "\n".join(line for _m, line in kept), str(kept[-1][0].get("message_id"))
 
     async def build_context(
         self,

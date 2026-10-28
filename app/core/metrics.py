@@ -115,6 +115,11 @@ COMPACTION_RESULTS = Counter(
     "Outcome of one summary update",
     ["outcome"],     # committed | nothing_new | refined | consolidated | fallback_trimmed | failed | lost_race
 )
+BRANCH_SUMMARY_RESULTS = Counter(
+    "memory_branch_summary_total",
+    "Outcome of ensuring a parent summary exists at a new branch point",
+    ["outcome"],     # not_a_branch | present | requested | unavailable | skipped | error
+)
 MEMORY_UPDATE_RESULTS = Counter(
     "memory_update_ingest_results_total",
     "Outcome of ingesting one memory.update.requested event",

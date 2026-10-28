@@ -39,6 +39,7 @@ from app.events.kafka_producer import KafkaProducer
 from app.workers.memory_update_worker import MemoryUpdateWorker
 from app.workers.outbox_worker import OutboxDaemonWorker
 from app.workers.summary_worker import SummaryWorker
+from app.workers.branch_summary_worker import BranchSummaryWorker
 from app.workers.fact_worker import FactWorker
 from app.workers.embedding_worker import EmbeddingWorker
 
@@ -86,6 +87,7 @@ class Container:
         self.memory_update_worker: Optional[MemoryUpdateWorker] = None
         self.outbox_worker: Optional[OutboxDaemonWorker] = None
         self.summary_worker: Optional[SummaryWorker] = None
+        self.branch_summary_worker: Optional[BranchSummaryWorker] = None
         self.fact_worker: Optional[FactWorker] = None
         self.embedding_worker: Optional[EmbeddingWorker] = None
 
@@ -204,6 +206,10 @@ class Container:
         )
         await self.summary_worker.start()
 
+        self.branch_summary_worker = BranchSummaryWorker(
+            memory_repo=self.memory_repo, cassandra_repo=self.cassandra_repo, scheduler=self.compaction_scheduler)
+        await self.branch_summary_worker.start()
+
         self.fact_worker = FactWorker(
             cassandra_session=self.cassandra_session,
             memory_service=self.memory_service,
@@ -229,6 +235,7 @@ class Container:
             "memory_update_worker",
             "outbox_worker",
             "summary_worker",
+            "branch_summary_worker",
             "fact_worker",
             "embedding_worker",
         ):

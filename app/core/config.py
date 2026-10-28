@@ -173,6 +173,11 @@ class SystemSettings(BaseSettings):
     # ON: llm-service renders `retrieved_history` ("Earlier Messages From This Conversation"). Deploy llm-service first
     # (an older llm-service ignores the field, so the extra work would be wasted, not harmful).
     HISTORY_SEARCH_ENABLED: bool = True
+    # Inherited (ancestor) summaries: how many archived versions are searched for one valid at the branch point, and the
+    # raw-message "bridge" that closes the gap between that version and the branch point.
+    ANCESTOR_VERSION_LOOKBACK: int = 50
+    ANCESTOR_BRIDGE_MAX_TOKENS: int = 1500
+    ANCESTOR_BRIDGE_FETCH_LIMIT: int = 400
     HISTORY_SEARCH_MAX_MESSAGES: int = 400
     HISTORY_SEARCH_TOP_K: int = 3
     HISTORY_SEARCH_MIN_COVERAGE: float = 0.5            # share of the question's distinctive terms a hit must contain

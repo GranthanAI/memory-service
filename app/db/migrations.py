@@ -122,6 +122,32 @@ class Migration6_SummaryMetadata(Migration):
                     raise
 
 
+class Migration7_SummaryVersions(Migration):
+    """Migration 7: immutable history of conversation summaries. `conversation_summaries` keeps ONE row per conversation
+    (the current summary); once a parent was summarized past a branch point its children lost the parent summary for
+    good. Every superseded summary is archived here, keyed (conversation_id, summary_version), and never updated.
+    New table only: nothing existing is touched. Re-running is safe."""
+    version = 7
+    description = "Create conversation_summary_versions"
+
+    def upgrade(self, session) -> None:
+        session.execute(SimpleStatement("""
+            CREATE TABLE IF NOT EXISTS conversation_summary_versions (
+                conversation_id    TEXT,
+                summary_version    INT,
+                summary_text       TEXT,
+                through_message_id TEXT,
+                through_created_at TIMESTAMP,
+                model_name         TEXT,
+                model_version      TEXT,
+                llm_provider       TEXT,
+                prompt_version     TEXT,
+                generated_at       TIMESTAMP,
+                PRIMARY KEY (conversation_id, summary_version)
+            ) WITH CLUSTERING ORDER BY (summary_version DESC)
+        """))
+
+
 # List of all migrations in chronological order
 MIGRATIONS: list[Migration] = [
     Migration1_InitialSchema(),
@@ -130,6 +156,7 @@ MIGRATIONS: list[Migration] = [
     Migration4_UserMemoryControls(),
     Migration5_SummaryWatermark(),
     Migration6_SummaryMetadata(),
+    Migration7_SummaryVersions(),
 ]
 
 
@@ -191,6 +218,7 @@ class MigrationManager:
         expected_tables = {
             "conversation_snapshots": ["conversation_id", "state", "message_count", "snapshot_metadata"],
             "conversation_summaries": ["conversation_id", "summary_text", "summary_version", "through_message_id", "through_created_at", "prompt_version", "llm_provider"],
+            "conversation_summary_versions": ["conversation_id", "summary_version", "summary_text", "through_message_id"],
             "processed_events": ["event_id", "conversation_id", "processed_at"],
             "outbox_jobs": ["job_id", "status", "topic", "payload"],
             "outbox_processing_index": ["claimed_date", "claimed_at", "job_id", "created_at"],

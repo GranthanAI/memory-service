@@ -46,6 +46,7 @@ from app.core.metrics import (
     COMPACTION_SOURCE_MESSAGES,
     SUMMARY_TOKENS,
 )
+from app.services.branch_validity import summary_valid_at_branch
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.memory_repository import MemoryRepository
 from app.services.llm_service import LLMService
@@ -142,10 +143,12 @@ class SummaryService:
     async def process_incremental_summary(
         self,
         conversation_id: str,
-        instructions: Optional[str] = None
+        instructions: Optional[str] = None,
+        upto_message_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Summarizes the messages that arrived after the stored watermark. Returns the snapshot
-        (unchanged when there was nothing new)."""
+        (unchanged when there was nothing new). With `upto_message_id` (a branch point) only messages at or before it are
+        summarized, so a child branch can inherit a summary that ends exactly there."""
         snapshot = await self.memory_repo.get_snapshot(conversation_id)
         if not snapshot:
             raise ValueError(f"Snapshot not found for conversation '{conversation_id}'.")
@@ -154,7 +157,7 @@ class SummaryService:
         committed = 0
         try:
             for _batch in range(MAX_BATCHES):
-                outcome = await self._summarize_one_batch(conversation_id)
+                outcome = await self._summarize_one_batch(conversation_id, upto_message_id)
                 if outcome is None:
                     break
                 committed += 1
@@ -256,7 +259,7 @@ class SummaryService:
 
     # ─── one model call, one conditional write ───────────────────────────────────────────────────────────────────────
 
-    async def _summarize_one_batch(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+    async def _summarize_one_batch(self, conversation_id: str, upto_message_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """One read -> model -> conditional write cycle. None = nothing new."""
         for attempt in range(1, MAX_CAS_ATTEMPTS + 1):
             row = self.cassandra_repo.get_summary(conversation_id) or {}
@@ -271,6 +274,8 @@ class SummaryService:
                 new, gap = select_new_messages(fetched, row.get("through_message_id"), row.get("through_created_at"))
                 if gap or len(fetched) >= CATCH_UP_FETCH_LIMIT:
                     logger.warning(f"Possible message gap before the summary watermark for '{conversation_id}'.")
+            if upto_message_id:
+                new = [m for m in new if summary_valid_at_branch(m.get("message_id"), upto_message_id, m.get("created_at"))]
             if not new:
                 return None
             batch = new[:BATCH_SIZE]
@@ -295,6 +300,12 @@ class SummaryService:
                 "through_message_id": str(last["message_id"]),
                 "through_created_at": _as_utc(last.get("created_at")),
             }
+            # Archive what is about to be replaced. Cassandra cannot make this one conditional batch with the compare-and-set
+            # below (different tables), so the order is: archive (idempotent) -> compare-and-set. A crash in between leaves
+            # an extra archived copy of the still-current row, never a lost version; an archive failure aborts the commit.
+            archive = getattr(self.cassandra_repo, "archive_summary_version", None)
+            if archive is not None and row and row.get("summary_version") is not None:
+                archive(row)
             if self.cassandra_repo.write_summary_if_current(record, expected_version):
                 await self._renew_inflight(conversation_id)
                 COMPACTION_RESULTS.labels(outcome=fit_outcome).inc()

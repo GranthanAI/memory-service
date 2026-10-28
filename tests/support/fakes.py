@@ -156,6 +156,14 @@ class FakeCassandra:
     def upsert_snapshot(self, snapshot):
         self.snapshots[snapshot["conversation_id"]] = dict(snapshot)
 
+    def archive_summary_version(self, row):
+        archive = self.__dict__.setdefault("archive", {}).setdefault(row["conversation_id"], {})
+        archive.setdefault(int(row["summary_version"]), dict(row))              # IF NOT EXISTS
+
+    def list_summary_versions(self, conversation_id, limit=50):
+        rows = self.__dict__.get("archive", {}).get(conversation_id, {})
+        return [dict(rows[v]) for v in sorted(rows, reverse=True)][:limit]
+
     def update_snapshot_summary_fields(self, conversation_id, summary_version, last_summary_msg_id):
         snap = self.snapshots.setdefault(conversation_id, {"conversation_id": conversation_id})
         snap["summary_version"], snap["last_summary_msg_id"] = summary_version, last_summary_msg_id
