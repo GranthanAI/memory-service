@@ -30,6 +30,10 @@ class SummarizeRequest(BaseModel):
         None,
         description="Previous summary text to build upon, if any exists."
     )
+    feedback: Optional[str] = Field(
+        None,
+        description="Corrections for a retry: items the previous attempt lost or invented."
+    )
     new_messages: List[LLMMessage] = Field(
         ...,
         description="List of new chat messages since the last summary snapshot."

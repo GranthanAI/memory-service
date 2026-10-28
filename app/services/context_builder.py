@@ -239,6 +239,7 @@ class ContextBuilder:
             user_id=resolved_user_id or user_id, conversation_id=conversation_id, window=messages,
             summary=summary or "", summary_meta=summary_meta)
         retrieved = await self._older_messages(conversation_id, query_text, messages)
+        anchors = self._anchors(conversation_id)
 
         # Assemble final context response payload
         context_payload = {
@@ -247,6 +248,7 @@ class ContextBuilder:
             "current_summary": summary or "",
             "short_term_messages": messages,
             "retrieved_history": retrieved,
+            "anchors": anchors,
             "parent_summaries": parent_summaries,
             "ancestor_summaries": branch_summaries,
             "summary_meta": summary_meta,
@@ -259,6 +261,19 @@ class ContextBuilder:
         }
 
         return context_payload
+
+    def _anchors(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """The anchor ledger of this conversation, in the order it should be shown (see anchors.render_order)."""
+        if not settings.ANCHOR_LEDGER_ENABLED:
+            return []
+        try:
+            lister = getattr(self.retrieval_service.memory_repo.cassandra_repo, "list_anchors", None)
+            rows = lister(conversation_id) if lister else []
+            from app.services.anchors import render_order
+            return render_order(rows if isinstance(rows, list) else [], settings.ANCHOR_RENDER_MAX_CHARS)
+        except Exception as exc:
+            logger.warning(f"Anchor ledger unavailable for {conversation_id}: {type(exc).__name__}")
+            return []
 
     # ─── conversation-memory assembly ─────────────────────────────────────────────────────────────────────────────
 

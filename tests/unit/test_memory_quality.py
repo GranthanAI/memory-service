@@ -50,8 +50,16 @@ class Cassandra:
     def get_fact_tombstones(self, u):
         return set(self.tombs.get(u, set()))
 
-    def get_facts(self, u, c):
-        return [r for (uu, cc, _), r in self.facts.items() if uu == u and cc == c]
+    def get_facts(self, u, c, include_inactive=False):
+        return [r for (uu, cc, _), r in self.facts.items()
+                if uu == u and cc == c and (include_inactive or (r.get("status") or "ACTIVE") == "ACTIVE")]
+
+    def retire_fact(self, u, c, f, superseded_by):
+        self.facts[(u, c, f)]["status"] = "SUPERSEDED"
+        self.facts[(u, c, f)]["superseded_by"] = superseded_by
+
+    def touch_fact_confirmed(self, u, c, f):
+        pass
 
     def get_fact(self, u, c, f):
         return self.facts.get((u, c, f))
@@ -83,10 +91,17 @@ class Milvus:
         self.rows.pop(str(fact_id), None)
 
 
+async def judge(new_statement, existing):
+    """Stands in for the LLM judgement: a statement that says it replaces something is a correction of the closest
+    memory; anything else that got this far is a restatement."""
+    replaces = " instead of " in new_statement or " no longer " in new_statement
+    return {"relation": "correction" if replaces else "same", "index": 0}
+
+
 @pytest.fixture
 def world():
     cass, milvus = Cassandra(), Milvus()
-    return cass, milvus, LongMemoryService(cass, milvus), RetrievalService(None, milvus, MemoryControls(cass))
+    return cass, milvus, LongMemoryService(cass, milvus, judge=judge), RetrievalService(None, milvus, MemoryControls(cass))
 
 
 def cand(category, importance, statement):
@@ -95,7 +110,7 @@ def cand(category, importance, statement):
 
 def stored(cass, user=ALICE):
     return sorted((r["category"], r["statement"], r["importance"], r["fact_version"])
-                  for (u, _c, _f), r in cass.facts.items() if u == user)
+                  for (u, _c, _f), r in cass.facts.items() if u == user and (r.get("status") or "ACTIVE") == "ACTIVE")
 
 
 async def recall(retrieval, query, user=ALICE):
@@ -160,6 +175,9 @@ async def test_a_changed_preference_replaces_the_old_one(world):
     rows = stored(cass)
     assert [s for _c, s, _i, _v in rows] == ["User now prefers concise answers instead of step-by-step explanations"]
     assert rows[0][3] == 2 and len(milvus.rows) == 1                               # old vector removed too
+    old = [r for r in cass.facts.values() if r["statement"] == "User prefers step-by-step explanations"]
+    assert len(old) == 1 and old[0]["status"] == "SUPERSEDED"                      # kept as history, not deleted
+    assert old[0]["superseded_by"] == next(r["fact_id"] for r in cass.facts.values() if r.get("status") != "SUPERSEDED")
 
 
 async def test_without_update_wording_a_weaker_near_duplicate_does_not_replace(world):

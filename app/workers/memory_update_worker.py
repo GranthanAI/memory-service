@@ -205,6 +205,39 @@ class MemoryUpdateWorker:
         })
         MEMORY_UPDATE_RESULTS.labels(outcome=outcome).inc()
 
+    async def _replace_discarded_answer(self, payload: dict, conversation_id: str) -> None:
+        """A regenerated answer REPLACES the one it supersedes in the durable window (and the cached one), instead of
+        sitting next to it. Matches by message id, so only events that carry real ids can replace (legacy uuid5 ids never
+        match). The old answer may already be inside a summary: summaries are rebuilt from raw messages going forward,
+        they are not edited retroactively."""
+        old_id = payload.get("replaces_message_id")
+        if not old_id or self.cassandra_repo is None:
+            return
+        for row in self.cassandra_repo.get_recent_messages(conversation_id, limit=400):
+            if str(row.get("message_id")) == str(old_id):
+                self.cassandra_repo.delete_recent_message_row(conversation_id, row["created_at"], row["message_id"])
+                memory_repo = getattr(self.dispatcher, "memory_repo", None)
+                if memory_repo is not None:
+                    await memory_repo.invalidate_conversation(conversation_id)
+                MEMORY_UPDATE_RESULTS.labels(outcome="answer_replaced").inc()
+                return
+
+    def _enqueue_explicit_memory(self, payload: dict, conversation_id: str, user_id: str, user_message_id: str) -> None:
+        """Fast path for short conversations: facts used to be extracted only after a summary, so a chat of a few messages
+        never produced any. A message that asks to be remembered ("remember that...", "from now on...") schedules an
+        extraction for THAT message right away (side-channel job: it does not touch the snapshot state machine)."""
+        from app.services import memory_policy
+        if (not settings.EXPLICIT_MEMORY_FAST_PATH or self.cassandra_repo is None
+                or not memory_policy.is_explicit_memory_request(payload.get("user_message", ""))):
+            return
+        self.cassandra_repo.insert_outbox_job({
+            "status": "PENDING", "created_at": datetime.now(timezone.utc), "job_id": uuid.uuid4(),
+            "topic": settings.KAFKA_FACT_TOPIC, "conversation_id": conversation_id,
+            "payload": json.dumps({"conversation_id": conversation_id, "user_id": user_id, "version": 0,
+                                   "reason": "explicit", "message_ids": [user_message_id]}),
+            "attempt_count": 0})
+        MEMORY_UPDATE_RESULTS.labels(outcome="explicit_memory_queued").inc()
+
     async def _process_turn(self, payload: dict) -> None:
         conversation_id = payload["conversation_id"]
         user_id = payload["user_id"]
@@ -240,6 +273,9 @@ class MemoryUpdateWorker:
 
         await self.dispatcher.dispatch(user_envelope)
         await self.dispatcher.dispatch(assistant_envelope)
+
+        await self._replace_discarded_answer(payload, conversation_id)
+        self._enqueue_explicit_memory(payload, conversation_id, user_id, ident["user_message_id"])
 
         logger.info(f"Ingested conversation turn into memory pipeline for {conversation_id}")
 

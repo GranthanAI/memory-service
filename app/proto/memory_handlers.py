@@ -24,6 +24,22 @@ _COUNTER = TokenCounter()
 MESSAGE_OVERHEAD_TOKENS = 4
 
 
+def build_retrieval_query(current: str, recent_messages: list) -> str:
+    """The text to embed for long-term fact retrieval: the current message, plus the previous user message when the
+    current one is too short to carry a topic on its own."""
+    from app.core.config import settings
+    current = (current or "").strip()
+    if not settings.RETRIEVAL_INCLUDE_PREVIOUS_TURN or not current:
+        return current
+    if len(current.split()) >= settings.RETRIEVAL_SHORT_QUERY_WORDS:
+        return current
+    for m in recent_messages or []:                              # newest first
+        text = str(m.get("content") or "").strip()
+        if m.get("role") == "user" and text and text != current:
+            return f"{text[:600]}\n{current}"
+    return current
+
+
 def fit_context_to_budget(result: dict, max_tokens: int) -> int:
     """Applies the caller's token budget to an assembled context and returns the REAL token total.
 
@@ -40,6 +56,7 @@ def fit_context_to_budget(result: dict, max_tokens: int) -> int:
             + sum(tokens(f.get("statement") or f.get("content")) for f in result.get("relevant_facts", []))
             + sum(tokens(m.get("content")) for m in result.get("retrieved_history", []))
             + sum(tokens(m.get("content")) for m in result.get("short_term_messages", []))
+            + sum(tokens(a.get("text")) for a in result.get("anchors", []))      # counted, but never dropped
         )
 
     used = total()
@@ -136,7 +153,14 @@ class MemoryContextHandler(memory_pb2_grpc.MemoryServiceServicer):
             query_vector = None
             if request.query:
                 try:
-                    query_vector = await self.embedding_client.generate_embedding(request.query)
+                    recent = []
+                    try:
+                        recent = await self.context_builder.retrieval_service.get_or_hydrate_recent_messages(
+                            request.conversation_id, limit=6)
+                    except Exception:
+                        pass
+                    query_vector = await self.embedding_client.generate_embedding(
+                        build_retrieval_query(request.query, recent))
                 except Exception as e:
                     logger.warning(f"Embedding generation failed, proceeding without semantic facts: {e}")
 
@@ -155,6 +179,8 @@ class MemoryContextHandler(memory_pb2_grpc.MemoryServiceServicer):
             return memory_pb2.GetMemoryContextResponse(
                 short_term_messages=_messages_to_proto(result.get("short_term_messages", [])),
                 retrieved_history=_messages_to_proto(result.get("retrieved_history", [])),
+                anchors=[memory_pb2.Anchor(kind=a["kind"], text=a["text"], source_message_id=a.get("source_message_id") or "")
+                         for a in result.get("anchors", [])],
                 medium_summary=result.get("current_summary") or "",
                 long_term_facts=_facts_to_proto(result.get("relevant_facts", [])),
                 semantic_snippets=[],

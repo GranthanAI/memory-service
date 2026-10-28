@@ -67,6 +67,17 @@ class RankingService:
         final_score = (w_sim * similarity) + (w_rec * recency_score) + (w_imp * importance)
         return float(final_score)
 
+    @staticmethod
+    def recency_anchor(fact: Dict[str, Any]):
+        """The most recent of last_confirmed / last_used, falling back to created_at."""
+        def as_ts(value):
+            if isinstance(value, datetime):
+                return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).timestamp()
+            return float(value) if isinstance(value, (int, float)) else None
+
+        stamps = [t for t in (as_ts(fact.get("last_confirmed")), as_ts(fact.get("last_used"))) if t is not None]
+        return max(stamps) if stamps else fact.get("created_at")
+
     @classmethod
     def rank_facts(
         cls,
@@ -90,7 +101,9 @@ class RankingService:
                 similarity = fact.get("similarity", 0.0)
 
             # support created_at as timestamp or datetime
-            created_at = fact.get("created_at")
+            # Recency counts from the last time the fact was confirmed or used, not from when it was first learned:
+            # a preference the user keeps repeating is current, an old one-off is not.
+            created_at = cls.recency_anchor(fact)
             importance = fact.get("importance", 0.0)
 
             # If importance is stored on 1-10 scale in legacy records, normalize it

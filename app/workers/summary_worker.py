@@ -120,7 +120,9 @@ class SummaryWorker:
                                 "payload": json.dumps({
                                     "conversation_id": conversation_id,
                                     "user_id": user_id,
-                                    "version": updated_snap.get("summary_version") or version
+                                    "version": updated_snap.get("summary_version") or version,
+                                    # the exact messages this summary job consumed (capped; newest kept)
+                                    "message_ids": list(updated_snap.get("consumed_message_ids") or [])[-120:],
                                 }),
                                 "attempt_count": 0
                             }

@@ -48,7 +48,7 @@ SUMMARY_USER_PROMPT_TEMPLATE = """PREVIOUS SUMMARY (may be empty):
 
 NEW MESSAGES (oldest first; all are new):
 {new_messages_json}
-
+{feedback_block}
 Write the UPDATED SUMMARY now."""
 
 # Used (a) when a summary came back over the token limit and (b) to consolidate a summary that is close to it, so repeated

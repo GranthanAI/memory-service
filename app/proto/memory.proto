@@ -73,6 +73,14 @@ message SemanticSnippet {
   string source_message_id = 3;
 }
 
+// A fact of the conversation that must never be lost to summarization (decision, constraint, open item, correction or
+// identifier), with the message it came from. Rendered next to the summary; never trimmed. Additive.
+message Anchor {
+  string kind = 1;                 // identifier | decision | constraint | open_item | correction
+  string text = 2;
+  string source_message_id = 3;
+}
+
 message GetMemoryContextResponse {
   repeated Message short_term_messages = 1;
   string medium_summary = 2;
@@ -86,6 +94,8 @@ message GetMemoryContextResponse {
   // Older ORIGINAL messages of this conversation that match the current question (exact text, oldest first), for
   // details a summary may have lost. Only this conversation's own messages; empty when nothing qualifies. Additive.
   repeated Message retrieved_history = 10;
+  // The anchor ledger of this conversation (open items first). Additive.
+  repeated Anchor anchors = 11;
 }
 
 message GetShortTermMemoryResponse {

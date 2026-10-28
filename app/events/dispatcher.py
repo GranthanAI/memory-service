@@ -94,6 +94,10 @@ class EventDispatcher:
         pending_messages, pending_tokens = (0, 0)
         if self.scheduler is not None:
             pending_messages, pending_tokens = await self.scheduler.note_message(conversation_id, message["content"] or "")
+            try:
+                await self.scheduler.note_activity(conversation_id, envelope.user_id)
+            except Exception:
+                pass                                                  # the idle trigger is best effort
         # Count rule: SUMMARY_THRESHOLD messages since the last summary's watermark. The scheduler's counters are kept
         # relative to that watermark (recomputed when a summary job ends); without them the original
         # "every N-th message overall" rule applies.

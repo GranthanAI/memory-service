@@ -15,6 +15,8 @@ from app.core.config import settings
 from app.core.metrics import LLM_LATENCY, LLM_REQUESTS, LLM_TOKENS
 from app.managers.llm_manager import LLMManager
 from app.prompts.fact_prompt import FACT_SYSTEM_PROMPT, FACT_USER_PROMPT_TEMPLATE
+from app.prompts.anchor_prompt import ANCHOR_SYSTEM_PROMPT, ANCHOR_USER_PROMPT_TEMPLATE
+from app.prompts.fact_judge_prompt import FACT_JUDGE_SYSTEM_PROMPT, FACT_JUDGE_USER_PROMPT_TEMPLATE
 from app.prompts.summary_prompt import (
     SUMMARY_CONSOLIDATE_SYSTEM_PROMPT,
     SUMMARY_CONSOLIDATE_USER_PROMPT_TEMPLATE,
@@ -47,6 +49,40 @@ class LLMService:
             r"^\s*([\w\-]+)\s*:\s*(0?\.\d+|1\.0|1)\s*:\s*(.+)$"
         )
 
+    async def extract_anchors(self, messages: List[dict], open_items: List[str]) -> tuple:
+        """(anchors, done_texts) for the judgement-based anchor kinds. Raises on an unusable answer (callers continue with
+        the deterministic anchors only)."""
+        from app.services.anchors import parse_llm_anchors
+        listing = "\n".join(f"{i}: {m.get('role')}: {str(m.get('content') or '')[:1500]}" for i, m in enumerate(messages))
+        prompt = [
+            {"role": "system", "content": ANCHOR_SYSTEM_PROMPT},
+            {"role": "user", "content": ANCHOR_USER_PROMPT_TEMPLATE.format(
+                open_items="\n".join(f"- {t}" for t in open_items) or "(none)", messages=listing)},
+        ]
+        return parse_llm_anchors(await self.llm_manager.generate_with_retry(prompt), messages)
+
+    async def judge_fact_relation(self, new_statement: str, existing: List[str]) -> dict:
+        """Explicit LLM judgement of how a new statement relates to existing memories: {"relation": same | correction |
+        different, "index": int | None}. Raises on an unusable answer so the caller can fall back to the non-destructive path."""
+        listing = "\n".join(f"{i}. {s}" for i, s in enumerate(existing))
+        messages = [
+            {"role": "system", "content": FACT_JUDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": FACT_JUDGE_USER_PROMPT_TEMPLATE.format(new_statement=new_statement, existing=listing)},
+        ]
+        raw = await self.llm_manager.generate_with_retry(messages)
+        match = re.search(r"\{.*\}", raw or "", re.DOTALL)
+        if not match:
+            raise ValueError("fact judge returned no JSON")
+        data = json.loads(match.group(0))
+        relation = str(data.get("relation") or "").strip().lower()
+        if relation not in ("same", "correction", "different"):
+            raise ValueError("fact judge returned an unknown relation")
+        index = data.get("index")
+        if relation != "different":
+            if not isinstance(index, int) or not 0 <= index < len(existing):
+                raise ValueError("fact judge returned an invalid index")
+        return {"relation": relation, "index": index if relation != "different" else None}
+
     async def summarize(self, request: SummarizeRequest) -> SummarizeResponse:
         """
         Builds the summary prompt, calls LLMManager, and returns the updated summary.
@@ -62,6 +98,10 @@ class LLMService:
         user_content = SUMMARY_USER_PROMPT_TEMPLATE.format(
             previous_summary=request.previous_summary or "No previous summary exists.",
             new_messages_json=new_messages_json,
+            feedback_block=(
+                "\nREVIEWER FEEDBACK on your previous attempt (fix these, change nothing else):\n" + request.feedback + "\n"
+                if request.feedback else ""
+            ),
         )
 
         messages = [

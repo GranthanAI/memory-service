@@ -57,6 +57,16 @@ class CompactionScheduler:
             logger.warning("compaction accounting unavailable (%s)", type(exc).__name__)
             return 0, 0
 
+    async def note_activity(self, conversation_id: str, user_id: str) -> None:
+        """Remembers when the conversation last had a message, for the idle trigger (see IdleCompactionWorker)."""
+        if self.redis is None:
+            return
+        try:
+            import time
+            await self.redis.zadd("compact:idle", {f"{conversation_id}|{user_id}": time.time()})
+        except Exception as exc:
+            logger.debug("idle accounting unavailable (%s)", type(exc).__name__)
+
     def pressure_due(self, pending_messages: int, pending_tokens: int) -> bool:
         return (pending_messages >= self.cfg.COMPACTION_MIN_NEW_MESSAGES
                 and pending_tokens >= self.cfg.COMPACTION_TRIGGER_TOKENS)

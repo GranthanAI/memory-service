@@ -128,7 +128,9 @@ class EmbeddingWorker:
                                 )
                                 logger.info(f"Fact merge statistics for user {user_id}: {stats}")
 
-                            # Transition snapshot to READY -> ACTIVE
+                            # Transition snapshot to READY -> ACTIVE (side-channel jobs never entered the state machine)
+                            if payload.get("reason") in ("explicit", "idle"):
+                                continue
                             await self.memory_service.transition_state(
                                 conversation_id, MemoryState.READY
                             )

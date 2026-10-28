@@ -197,9 +197,12 @@ async def test_merge_user_facts_supersedes_on_higher_importance(mock_repos):
     assert stats["superseded"] == 1
     assert stats["inserted"] == 0
 
-    # Verify old fact deletion
-    cassandra_repo.delete_fact.assert_called_once_with("user-123", "preferences", existing_fact_id)
-    milvus_repo.delete_fact.assert_called_once_with("user-123", str(existing_fact_id))
+    # The old fact is RETIRED (kept as history, superseded_by the new one), never hard-deleted
+    cassandra_repo.delete_fact.assert_not_called()
+    cassandra_repo.retire_fact.assert_called_once()
+    retire_args = cassandra_repo.retire_fact.call_args[0]
+    assert retire_args[:3] == ("user-123", "preferences", existing_fact_id)
+    milvus_repo.delete_fact.assert_called_once_with("user-123", str(existing_fact_id))   # vector gone: never retrieved
 
     # Verify new fact insertion with version incremented (2 + 1 = 3)
     cassandra_repo.upsert_fact.assert_called_once()
@@ -207,5 +210,6 @@ async def test_merge_user_facts_supersedes_on_higher_importance(mock_repos):
     assert new_record["statement"] == "User lives in a house in London."
     assert new_record["fact_version"] == 3
     assert new_record["fact_id"] != existing_fact_id
+    assert retire_args[3] == new_record["fact_id"]
 
     milvus_repo.insert_facts.assert_called_once()

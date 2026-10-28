@@ -165,6 +165,12 @@ class SystemSettings(BaseSettings):
     SUMMARY_CONSOLIDATE_RATIO: float = 0.85             # at/above this share of the limit the summary is consolidated
     SUMMARY_CONSOLIDATE_TARGET_RATIO: float = 0.65
     SUMMARY_PROMPT_VERSION: str = "2"
+    # Anchor ledger (decisions, constraints, open items, corrections, identifiers kept outside the summary text) and the
+    # validation of every new summary against it. Off = the previous behaviour (no ledger, no validation).
+    ANCHOR_LEDGER_ENABLED: bool = True
+    ANCHOR_LLM_EXTRACTION: bool = True          # judgement-based kinds via the model; identifiers are always deterministic
+    ANCHOR_RENDER_MAX_CHARS: int = 3000         # size of the ledger shown next to the summary
+    SUMMARY_VALIDATION_RETRIES: int = 1         # one corrective retry, then the batch stays unsummarized
     # Context assembly: what stays verbatim next to a summary, and how far back a stale summary is bridged.
     CONTEXT_MIN_VERBATIM_MESSAGES: int = 6
     CONTEXT_MAX_UNSUMMARIZED_MESSAGES: int = 120
@@ -178,6 +184,25 @@ class SystemSettings(BaseSettings):
     ANCESTOR_VERSION_LOOKBACK: int = 50
     ANCESTOR_BRIDGE_MAX_TOKENS: int = 1500
     ANCESTOR_BRIDGE_FETCH_LIMIT: int = 400
+    # Core profile tier: who the user is (identity / role, category "personal") is offered with every request, within a
+    # small budget, next to the stable preferences. Off = only question-matched facts and stable preferences.
+    CORE_PROFILE_ENABLED: bool = True
+    CORE_PROFILE_MAX_FACTS: int = 2
+    CORE_PROFILE_MIN_IMPORTANCE: float = 0.7
+    CORE_PROFILE_CHAR_BUDGET: int = 400
+    # Long-term fact retrieval embeds the current message AND the previous user message when the current one is short
+    # ("and what about the second one?" has no topic on its own).
+    RETRIEVAL_INCLUDE_PREVIOUS_TURN: bool = True
+    RETRIEVAL_SHORT_QUERY_WORDS: int = 10
+    # Explicit-memory fast path and idle trigger (facts from short conversations).
+    EXPLICIT_MEMORY_FAST_PATH: bool = True
+    IDLE_COMPACTION_ENABLED: bool = True
+    IDLE_COMPACTION_MINUTES: int = 30
+    IDLE_COMPACTION_POLL_SECONDS: int = 60
+    # What a deleted conversation takes with it. Messages, summaries (and versions) and cache keys always go. Facts learned
+    # from it stay unless this is true (they are the user's memory, not the conversation's); the user can delete them in the
+    # memory UI.
+    DELETE_FACTS_WITH_CONVERSATION: bool = False
     HISTORY_SEARCH_MAX_MESSAGES: int = 400
     HISTORY_SEARCH_TOP_K: int = 3
     HISTORY_SEARCH_MIN_COVERAGE: float = 0.5            # share of the question's distinctive terms a hit must contain

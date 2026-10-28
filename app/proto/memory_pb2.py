@@ -24,15 +24,15 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x16\x61pp/proto/memory.proto\x12\x06memory\"\xc4\x01\n\x17GetMemoryContextRequest\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\x12\r\n\x05query\x18\x03 \x01(\t\x12\"\n\x05scope\x18\x04 \x01(\x0e\x32\x13.memory.MemoryScope\x12\x12\n\nmax_tokens\x18\x05 \x01(\x05\x12\x10\n\x08trace_id\x18\x06 \x01(\t\x12&\n\tancestors\x18\x07 \x03(\x0b\x32\x13.memory.AncestorRef\"?\n\x0b\x41ncestorRef\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x17\n\x0fupto_message_id\x18\x02 \x01(\t\"f\n\x19GetShortTermMemoryRequest\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\x12\r\n\x05limit\x18\x03 \x01(\x05\x12\x10\n\x08trace_id\x18\x04 \x01(\t\"O\n\x07Message\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12\x11\n\ttimestamp\x18\x03 \x01(\x03\x12\x12\n\nmessage_id\x18\x04 \x01(\t\"d\n\x04\x46\x61\x63t\x12\x0f\n\x07\x63ontent\x18\x01 \x01(\t\x12\x12\n\nconfidence\x18\x02 \x01(\x02\x12\x10\n\x08\x63\x61tegory\x18\x03 \x01(\t\x12\x14\n\x0clast_updated\x18\x04 \x01(\x03\x12\x0f\n\x07\x66\x61\x63t_id\x18\x05 \x01(\t\"w\n\x0f\x41ncestorSummary\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x0f\n\x07summary\x18\x02 \x01(\t\x12!\n\x19\x63overs_through_message_id\x18\x03 \x01(\t\x12\x17\n\x0fsummary_version\x18\x04 \x01(\x05\"V\n\x0fSemanticSnippet\x12\x0f\n\x07\x63ontent\x18\x01 \x01(\t\x12\x17\n\x0frelevance_score\x18\x02 \x01(\x02\x12\x19\n\x11source_message_id\x18\x03 \x01(\t\"\x83\x03\n\x18GetMemoryContextResponse\x12,\n\x13short_term_messages\x18\x01 \x03(\x0b\x32\x0f.memory.Message\x12\x16\n\x0emedium_summary\x18\x02 \x01(\t\x12%\n\x0flong_term_facts\x18\x03 \x03(\x0b\x32\x0c.memory.Fact\x12\x32\n\x11semantic_snippets\x18\x04 \x03(\x0b\x32\x17.memory.SemanticSnippet\x12\x14\n\x0ctotal_tokens\x18\x05 \x01(\x05\x12\x12\n\nrequest_id\x18\x06 \x01(\t\x12\x33\n\x12\x61ncestor_summaries\x18\x07 \x03(\x0b\x32\x17.memory.AncestorSummary\x12\x17\n\x0fsummary_version\x18\x08 \x01(\x05\x12\"\n\x1asummary_through_message_id\x18\t \x01(\t\x12*\n\x11retrieved_history\x18\n \x03(\x0b\x32\x0f.memory.Message\"i\n\x1aGetShortTermMemoryResponse\x12!\n\x08messages\x18\x01 \x03(\x0b\x32\x0f.memory.Message\x12\x14\n\x0ctotal_tokens\x18\x02 \x01(\x05\x12\x12\n\nrequest_id\x18\x03 \x01(\t*O\n\x0bMemoryScope\x12\x0e\n\nSHORT_TERM\x10\x00\x12\n\n\x06MEDIUM\x10\x01\x12\r\n\tLONG_TERM\x10\x02\x12\x0c\n\x08SEMANTIC\x10\x03\x12\x07\n\x03\x41LL\x10\x04\x32\xc3\x01\n\rMemoryService\x12U\n\x10GetMemoryContext\x12\x1f.memory.GetMemoryContextRequest\x1a .memory.GetMemoryContextResponse\x12[\n\x12GetShortTermMemory\x12!.memory.GetShortTermMemoryRequest\x1a\".memory.GetShortTermMemoryResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x16\x61pp/proto/memory.proto\x12\x06memory\"\xc4\x01\n\x17GetMemoryContextRequest\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\x12\r\n\x05query\x18\x03 \x01(\t\x12\"\n\x05scope\x18\x04 \x01(\x0e\x32\x13.memory.MemoryScope\x12\x12\n\nmax_tokens\x18\x05 \x01(\x05\x12\x10\n\x08trace_id\x18\x06 \x01(\t\x12&\n\tancestors\x18\x07 \x03(\x0b\x32\x13.memory.AncestorRef\"?\n\x0b\x41ncestorRef\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x17\n\x0fupto_message_id\x18\x02 \x01(\t\"f\n\x19GetShortTermMemoryRequest\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\x12\r\n\x05limit\x18\x03 \x01(\x05\x12\x10\n\x08trace_id\x18\x04 \x01(\t\"O\n\x07Message\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12\x11\n\ttimestamp\x18\x03 \x01(\x03\x12\x12\n\nmessage_id\x18\x04 \x01(\t\"d\n\x04\x46\x61\x63t\x12\x0f\n\x07\x63ontent\x18\x01 \x01(\t\x12\x12\n\nconfidence\x18\x02 \x01(\x02\x12\x10\n\x08\x63\x61tegory\x18\x03 \x01(\t\x12\x14\n\x0clast_updated\x18\x04 \x01(\x03\x12\x0f\n\x07\x66\x61\x63t_id\x18\x05 \x01(\t\"w\n\x0f\x41ncestorSummary\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x0f\n\x07summary\x18\x02 \x01(\t\x12!\n\x19\x63overs_through_message_id\x18\x03 \x01(\t\x12\x17\n\x0fsummary_version\x18\x04 \x01(\x05\"V\n\x0fSemanticSnippet\x12\x0f\n\x07\x63ontent\x18\x01 \x01(\t\x12\x17\n\x0frelevance_score\x18\x02 \x01(\x02\x12\x19\n\x11source_message_id\x18\x03 \x01(\t\"?\n\x06\x41nchor\x12\x0c\n\x04kind\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\x12\x19\n\x11source_message_id\x18\x03 \x01(\t\"\xa4\x03\n\x18GetMemoryContextResponse\x12,\n\x13short_term_messages\x18\x01 \x03(\x0b\x32\x0f.memory.Message\x12\x16\n\x0emedium_summary\x18\x02 \x01(\t\x12%\n\x0flong_term_facts\x18\x03 \x03(\x0b\x32\x0c.memory.Fact\x12\x32\n\x11semantic_snippets\x18\x04 \x03(\x0b\x32\x17.memory.SemanticSnippet\x12\x14\n\x0ctotal_tokens\x18\x05 \x01(\x05\x12\x12\n\nrequest_id\x18\x06 \x01(\t\x12\x33\n\x12\x61ncestor_summaries\x18\x07 \x03(\x0b\x32\x17.memory.AncestorSummary\x12\x17\n\x0fsummary_version\x18\x08 \x01(\x05\x12\"\n\x1asummary_through_message_id\x18\t \x01(\t\x12*\n\x11retrieved_history\x18\n \x03(\x0b\x32\x0f.memory.Message\x12\x1f\n\x07\x61nchors\x18\x0b \x03(\x0b\x32\x0e.memory.Anchor\"i\n\x1aGetShortTermMemoryResponse\x12!\n\x08messages\x18\x01 \x03(\x0b\x32\x0f.memory.Message\x12\x14\n\x0ctotal_tokens\x18\x02 \x01(\x05\x12\x12\n\nrequest_id\x18\x03 \x01(\t*O\n\x0bMemoryScope\x12\x0e\n\nSHORT_TERM\x10\x00\x12\n\n\x06MEDIUM\x10\x01\x12\r\n\tLONG_TERM\x10\x02\x12\x0c\n\x08SEMANTIC\x10\x03\x12\x07\n\x03\x41LL\x10\x04\x32\xc3\x01\n\rMemoryService\x12U\n\x10GetMemoryContext\x12\x1f.memory.GetMemoryContextRequest\x1a .memory.GetMemoryContextResponse\x12[\n\x12GetShortTermMemory\x12!.memory.GetShortTermMemoryRequest\x1a\".memory.GetShortTermMemoryResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'app.proto.memory_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_MEMORYSCOPE']._serialized_start=1291
-  _globals['_MEMORYSCOPE']._serialized_end=1370
+  _globals['_MEMORYSCOPE']._serialized_start=1389
+  _globals['_MEMORYSCOPE']._serialized_end=1468
   _globals['_GETMEMORYCONTEXTREQUEST']._serialized_start=35
   _globals['_GETMEMORYCONTEXTREQUEST']._serialized_end=231
   _globals['_ANCESTORREF']._serialized_start=233
@@ -47,10 +47,12 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_ANCESTORSUMMARY']._serialized_end=704
   _globals['_SEMANTICSNIPPET']._serialized_start=706
   _globals['_SEMANTICSNIPPET']._serialized_end=792
-  _globals['_GETMEMORYCONTEXTRESPONSE']._serialized_start=795
-  _globals['_GETMEMORYCONTEXTRESPONSE']._serialized_end=1182
-  _globals['_GETSHORTTERMMEMORYRESPONSE']._serialized_start=1184
-  _globals['_GETSHORTTERMMEMORYRESPONSE']._serialized_end=1289
-  _globals['_MEMORYSERVICE']._serialized_start=1373
-  _globals['_MEMORYSERVICE']._serialized_end=1568
+  _globals['_ANCHOR']._serialized_start=794
+  _globals['_ANCHOR']._serialized_end=857
+  _globals['_GETMEMORYCONTEXTRESPONSE']._serialized_start=860
+  _globals['_GETMEMORYCONTEXTRESPONSE']._serialized_end=1280
+  _globals['_GETSHORTTERMMEMORYRESPONSE']._serialized_start=1282
+  _globals['_GETSHORTTERMMEMORYRESPONSE']._serialized_end=1387
+  _globals['_MEMORYSERVICE']._serialized_start=1471
+  _globals['_MEMORYSERVICE']._serialized_end=1666
 # @@protoc_insertion_point(module_scope)

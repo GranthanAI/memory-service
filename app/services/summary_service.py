@@ -35,6 +35,7 @@ remain retrievable. A model does not reliably obey a length request, so the resu
 """
 
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,6 +47,7 @@ from app.core.metrics import (
     COMPACTION_SOURCE_MESSAGES,
     SUMMARY_TOKENS,
 )
+from app.services import anchors as anchor_ledger
 from app.services.branch_validity import summary_valid_at_branch
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.memory_repository import MemoryRepository
@@ -65,6 +67,17 @@ SUMMARY_MAX_CHARS = 6000     # secondary guard next to the token limit (a summar
 
 class SummaryOutputError(RuntimeError):
     """The model returned an unusable summary (empty). Nothing was written."""
+
+
+class SummaryValidationError(RuntimeError):
+    """The new summary lost a pinned fact or invented an entity, even after one corrective retry. Nothing was written: the
+    previous summary stays and the watermark does not advance, so the batch is summarized again later."""
+
+
+# Share of the token cap each section of the summary may use when the deterministic fallback has to cut (the prompt's headings,
+# most important first). Identifiers also live in the anchor ledger, so KEY FACTS can be cut without losing them.
+SECTION_WEIGHTS = (3.0, 3.0, 1.5, 2.0, 3.0, 2.0, 2.0, 1.0)
+_HEADING = re.compile(r"^\s*(?:#{1,3}\s*)?(?:\d+[.)]\s*)?([A-Z][A-Z &/'-]{3,})\s*:?\s*$")
 
 
 class ConcurrentSummaryUpdate(RuntimeError):
@@ -155,12 +168,14 @@ class SummaryService:
 
         started = time.monotonic()
         committed = 0
+        consumed_ids: List[str] = []
         try:
             for _batch in range(MAX_BATCHES):
                 outcome = await self._summarize_one_batch(conversation_id, upto_message_id)
                 if outcome is None:
                     break
                 committed += 1
+                consumed_ids.extend(outcome.get("message_ids", []))
                 snapshot["summary_version"] = outcome["summary_version"]
                 snapshot["last_summary_msg_id"] = outcome["through_message_id"]
                 if not outcome["more"]:
@@ -174,6 +189,8 @@ class SummaryService:
         finally:
             COMPACTION_SECONDS.observe(time.monotonic() - started)
 
+        # Exactly the messages this job turned into summary: lets fact extraction work from those, not from "the last 10".
+        snapshot["consumed_message_ids"] = consumed_ids
         if committed:
             snapshot["updated_at"] = datetime.now(timezone.utc)
             # Only the summary columns are written. The snapshot row was read before the model call; writing it back
@@ -230,8 +247,63 @@ class SummaryService:
             logger.warning("summary consolidation unavailable (%s)", type(exc).__name__)
             return None
 
+    def _split_sections(self, text: str):
+        """[(heading line or None, [body lines])] following the prompt's headings; a preamble has heading None."""
+        sections: list = [[None, []]]
+        for line in text.split("\n"):
+            if _HEADING.match(line):
+                sections.append([line, []])
+            else:
+                sections[-1][1].append(line)
+        return [(h, b) for h, b in sections if h is not None or any(l.strip() for l in b)]
+
+    def _trim_by_sections(self, text: str) -> Optional[str]:
+        """Cut each section to its own budget at whole lines (bullets), instead of cutting the END of the text, which is
+        where TIMELINE and KEY FACTS live. Budget a section does not use is shared with the others. None when the text has
+        no recognisable headings."""
+        sections = self._split_sections(text)
+        headed = [i for i, (h, _b) in enumerate(sections) if h is not None]
+        if len(headed) < 2:
+            return None
+        cap = settings.SUMMARY_MAX_TOKENS
+        weights = {i: SECTION_WEIGHTS[min(n, len(SECTION_WEIGHTS) - 1)] for n, i in enumerate(headed)}
+        cost = {i: self.counter.count("\n".join(([sections[i][0]] if sections[i][0] else []) + sections[i][1])) for i in range(len(sections))}
+        budget = {i: 0.0 for i in range(len(sections))}
+        pool = float(cap - sum(cost[i] for i in range(len(sections)) if i not in weights))      # preamble is kept as is
+        open_ids = set(weights)
+        while open_ids and pool > 0:
+            total_w = sum(weights[i] for i in open_ids)
+            settled = [i for i in open_ids if cost[i] <= pool * weights[i] / total_w]
+            if not settled:
+                for i in open_ids:
+                    budget[i] = pool * weights[i] / total_w
+                break
+            for i in settled:
+                budget[i] = cost[i]
+                pool -= cost[i]
+                open_ids.discard(i)
+        out: list = []
+        for i, (heading, body) in enumerate(sections):
+            if i not in weights or cost[i] <= budget[i]:
+                out.extend(([heading] if heading else []) + body)
+                continue
+            kept, used = [], self.counter.count(heading or "")
+            for line in body:
+                c = self.counter.count(line) + 1
+                if used + c > budget[i]:
+                    break
+                kept.append(line)
+                used += c
+            if any(l.strip() for l in kept):                       # a heading with nothing under it is not kept
+                out.extend(([heading] if heading else []) + kept)
+        return "\n".join(out).strip()
+
     def _trim(self, text: str) -> str:
-        """Deterministic fallback. Importance-ordered text loses its least important tail first."""
+        """Deterministic fallback: per-section budgets (see _trim_by_sections); only text without the expected headings is
+        cut from its tail."""
+        by_section = self._trim_by_sections(text)
+        if by_section and not self._over_limit(by_section):
+            return by_section
         clipped = self.counter.clip(text, settings.SUMMARY_MAX_TOKENS)
         if len(clipped) > SUMMARY_MAX_CHARS:
             clipped = clipped[: SUMMARY_MAX_CHARS - 1].rstrip() + "…"
@@ -259,6 +331,72 @@ class SummaryService:
 
     # ─── one model call, one conditional write ───────────────────────────────────────────────────────────────────────
 
+    def _load_ledger(self, conversation_id: str) -> List[Dict[str, Any]]:
+        lister = getattr(self.cassandra_repo, "list_anchors", None)
+        if lister is None:
+            return []
+        try:
+            return list(lister(conversation_id) or [])
+        except Exception as exc:                                  # the ledger is additive: a read failure must not block summaries
+            logger.warning("anchor ledger unavailable (%s)", type(exc).__name__)
+            return []
+
+    async def _summarize_and_validate(self, conversation_id: str, previous_text: str, batch: List[Dict[str, Any]]):
+        """One model call (plus at most SUMMARY_VALIDATION_RETRIES corrective retries) producing a summary that is checked
+        against the anchor ledger. Returns (summary, fit outcome, ledger entries to write). Raises SummaryValidationError
+        when the summary still loses a pinned fact or invents an entity: nothing is written then."""
+        def request(feedback: Optional[str] = None) -> SummarizeRequest:
+            return SummarizeRequest(
+                previous_summary=previous_text,
+                new_messages=[LLMMessage(role=m["role"], content=m["content"]) for m in batch],
+                feedback=feedback)
+
+        response = await self.llm_service.summarize(request())
+        text, fit_outcome = await self.fit_summary(response.summary)
+        if not settings.ANCHOR_LEDGER_ENABLED:
+            return text, fit_outcome, []
+
+        prior = self._load_ledger(conversation_id)
+        if not prior and previous_text.strip():                   # bootstrap: a summary written before the ledger existed
+            prior = [{"kind": "identifier", "text": t, "source_message_id": "", "status": "active"}
+                     for t in anchor_ledger.hard_entities(previous_text)]
+        new_anchors = anchor_ledger.extract_identifiers(batch)
+        done_texts: List[str] = []
+        extractor = getattr(self.llm_service, "extract_anchors", None)
+        if settings.ANCHOR_LLM_EXTRACTION and extractor is not None:
+            open_items = [a["text"] for a in prior if a.get("kind") == "open_item" and a.get("status") == "open"]
+            try:
+                judged, done_texts = await extractor(batch, open_items)
+                new_anchors = new_anchors + list(judged)
+            except Exception as exc:                              # identifiers still protect the numbers and names
+                logger.warning("anchor extraction unavailable (%s)", type(exc).__name__)
+        merged = anchor_ledger.merge_ledger(prior, new_anchors, done_texts)
+        new_text = " ".join(str(m.get("content") or "") for m in batch)
+
+        def check(summary: str):
+            return anchor_ledger.validate_summary(
+                new_summary=summary, previous_summary=previous_text, new_messages_text=new_text,
+                prior_ledger=prior, merged_ledger=merged)
+
+        report = check(text)
+        for _ in range(settings.SUMMARY_VALIDATION_RETRIES):
+            if report.ok:
+                break
+            response = await self.llm_service.summarize(request(report.feedback()))
+            text, fit_outcome = await self.fit_summary(response.summary)
+            report = check(text)
+        if not report.ok:
+            lost = bool(report.lost_anchors or report.dropped_open_items)
+            COMPACTION_RESULTS.labels(outcome="anchor_lost" if lost else "unsupported_entity").inc()
+            raise SummaryValidationError(
+                f"summary for '{conversation_id}' failed validation (lost={len(report.lost_anchors)}, "
+                f"open_items_dropped={len(report.dropped_open_items)}, unsupported={len(report.unsupported_entities)}); "
+                "the previous summary is kept and the batch stays unsummarized")
+
+        stored = {r["anchor_id"]: r.get("status") for r in prior if r.get("anchor_id")}     # bootstrap rows are not stored yet
+        changes = [a for a in merged if a.anchor_id not in stored or stored[a.anchor_id] != a.status]
+        return text, fit_outcome, changes
+
     async def _summarize_one_batch(self, conversation_id: str, upto_message_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """One read -> model -> conditional write cycle. None = nothing new."""
         for attempt in range(1, MAX_CAS_ATTEMPTS + 1):
@@ -281,11 +419,7 @@ class SummaryService:
             batch = new[:BATCH_SIZE]
 
             await self._renew_inflight(conversation_id)               # the in-flight guard must outlive a slow model call
-            response = await self.llm_service.summarize(SummarizeRequest(
-                previous_summary=previous_text,
-                new_messages=[LLMMessage(role=m["role"], content=m["content"]) for m in batch],
-            ))
-            text, fit_outcome = await self.fit_summary(response.summary)
+            text, fit_outcome, ledger_changes = await self._summarize_and_validate(conversation_id, previous_text, batch)
 
             last = batch[-1]
             record = {
@@ -306,6 +440,11 @@ class SummaryService:
             archive = getattr(self.cassandra_repo, "archive_summary_version", None)
             if archive is not None and row and row.get("summary_version") is not None:
                 archive(row)
+            # The ledger is written BEFORE the summary commit: a committed summary always has its anchors. If the commit then
+            # loses a race, the anchors are still true facts of real messages (idempotent upsert), so they are harmless.
+            upsert_anchors = getattr(self.cassandra_repo, "upsert_anchors", None)
+            if ledger_changes and upsert_anchors is not None:
+                upsert_anchors(conversation_id, ledger_changes)
             if self.cassandra_repo.write_summary_if_current(record, expected_version):
                 await self._renew_inflight(conversation_id)
                 COMPACTION_RESULTS.labels(outcome=fit_outcome).inc()
@@ -316,6 +455,7 @@ class SummaryService:
                     f"({len(batch)} new message(s), fit={fit_outcome})."
                 )
                 return {
+                    "message_ids": [str(m["message_id"]) for m in batch],
                     "summary_version": record["summary_version"],
                     "through_message_id": record["through_message_id"],
                     "more": len(new) > len(batch),

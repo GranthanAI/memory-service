@@ -23,6 +23,20 @@ from app.core.logging import set_log_context, clear_log_context
 
 logger = logging.getLogger("memory_service.workers.fact_worker")
 
+SIDE_CHANNEL_REASONS = ("explicit", "idle")
+EXTRACTION_MESSAGE_CHARS = 600
+EXTRACTION_MAX_MESSAGES = 60
+
+
+def build_extraction_notes(summary_text: str, messages: list) -> str:
+    """Extraction input: the exact messages first (the evidence), the conversation summary after them as context only."""
+    lines = [f"- {m.get('role')}: {str(m.get('content') or '').strip()[:EXTRACTION_MESSAGE_CHARS]}"
+             for m in messages[-EXTRACTION_MAX_MESSAGES:] if str(m.get("content") or "").strip()]
+    parts = ["Messages to extract from (the user's own statements are the evidence):", *lines]
+    if (summary_text or "").strip():
+        parts += ["", "Conversation summary (context only; do not extract from it alone):", summary_text.strip()]
+    return "\n".join(parts)
+
 
 class FactWorker:
     """
@@ -108,10 +122,17 @@ class FactWorker:
 
                             logger.info(f"Processing fact extraction request for conversation: {conversation_id}")
 
+                            # Explicit-memory / idle jobs are side-channel: they run next to the snapshot state machine,
+                            # not through it (the snapshot is usually ACTIVE, which has no edge to EXTRACTING_FACTS).
+                            reason = payload.get("reason")
+                            side_channel = reason in SIDE_CHANNEL_REASONS
+                            message_ids = [str(i) for i in (payload.get("message_ids") or [])]
+
                             # 1. Transition snapshot to EXTRACTING_FACTS
-                            await self.memory_service.transition_state(
-                                conversation_id, MemoryState.EXTRACTING_FACTS
-                            )
+                            if not side_channel:
+                                await self.memory_service.transition_state(
+                                    conversation_id, MemoryState.EXTRACTING_FACTS
+                                )
 
                             # 2. Retrieve the conversation summary & recent messages for context
                             summary_text = await self.memory_repo.get_summary(conversation_id) or ""
@@ -140,15 +161,26 @@ class FactWorker:
                             notes = summary_text
                             if user_lines:
                                 notes = "\n".join([summary_text, "", "The user's own recent messages:", *user_lines])
+                            if message_ids:
+                                # Extract from EXACTLY the messages this job is about; the summary is only context.
+                                wanted = set(message_ids)
+                                consumed = [m for m in self.cassandra_repo.get_recent_messages(conversation_id, limit=400)
+                                            if str(m.get("message_id")) in wanted]
+                                consumed.sort(key=lambda m: (m.get("created_at"), str(m.get("message_id"))))
+                                if consumed:
+                                    notes = build_extraction_notes(summary_text, consumed)
                             extract_request = FactExtractRequest(summary=notes)
 
                             facts = await self._extract_facts(user_id, conversation_id, extract_request)
                             logger.info(f"Extracted {len(facts)} facts from conversation '{conversation_id}'.")
 
                             # 4. Transition snapshot to EMBEDDING_PENDING
-                            updated_snap = await self.memory_service.transition_state(
-                                conversation_id, MemoryState.EMBEDDING_PENDING
-                            )
+                            if side_channel:
+                                updated_snap = {"fact_version": version}
+                            else:
+                                updated_snap = await self.memory_service.transition_state(
+                                    conversation_id, MemoryState.EMBEDDING_PENDING
+                                )
 
                             # 5. Schedule outbox job for Embedding Worker
                             outbox_job = {
@@ -161,7 +193,8 @@ class FactWorker:
                                     "conversation_id": conversation_id,
                                     "user_id": user_id,
                                     "facts": facts,
-                                    "version": updated_snap.get("fact_version") or version
+                                    "version": updated_snap.get("fact_version") or version,
+                                    **({"reason": reason} if side_channel else {}),
                                 }),
                                 "attempt_count": 0
                             }

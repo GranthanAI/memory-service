@@ -40,6 +40,8 @@ from app.workers.memory_update_worker import MemoryUpdateWorker
 from app.workers.outbox_worker import OutboxDaemonWorker
 from app.workers.summary_worker import SummaryWorker
 from app.workers.branch_summary_worker import BranchSummaryWorker
+from app.workers.idle_compaction_worker import IdleCompactionWorker
+from app.workers.conversation_delete_worker import ConversationDeleteWorker
 from app.workers.fact_worker import FactWorker
 from app.workers.embedding_worker import EmbeddingWorker
 
@@ -88,6 +90,8 @@ class Container:
         self.outbox_worker: Optional[OutboxDaemonWorker] = None
         self.summary_worker: Optional[SummaryWorker] = None
         self.branch_summary_worker: Optional[BranchSummaryWorker] = None
+        self.idle_compaction_worker: Optional[IdleCompactionWorker] = None
+        self.conversation_delete_worker: Optional[ConversationDeleteWorker] = None
         self.fact_worker: Optional[FactWorker] = None
         self.embedding_worker: Optional[EmbeddingWorker] = None
 
@@ -140,7 +144,8 @@ class Container:
         self.compaction_scheduler = CompactionScheduler(self.redis_client, self.cassandra_repo)
         self.summary_service = SummaryService(self.memory_repo, self.cassandra_repo, self.llm_service,
                                               scheduler=self.compaction_scheduler)
-        self.long_memory_service = LongMemoryService(self.cassandra_repo, self.milvus_repo)
+        self.long_memory_service = LongMemoryService(
+            self.cassandra_repo, self.milvus_repo, judge=self.llm_service.judge_fact_relation)
         self.ranking_service = RankingService()
 
         # 5. Setup Retrieval & Context services
@@ -210,6 +215,14 @@ class Container:
             memory_repo=self.memory_repo, cassandra_repo=self.cassandra_repo, scheduler=self.compaction_scheduler)
         await self.branch_summary_worker.start()
 
+        self.idle_compaction_worker = IdleCompactionWorker(
+            self.redis_client, self.memory_repo, self.memory_service, self.cassandra_repo)
+        await self.idle_compaction_worker.start()
+
+        self.conversation_delete_worker = ConversationDeleteWorker(
+            self.memory_repo, self.cassandra_repo, self.milvus_repo, self.redis_client)
+        await self.conversation_delete_worker.start()
+
         self.fact_worker = FactWorker(
             cassandra_session=self.cassandra_session,
             memory_service=self.memory_service,
@@ -236,6 +249,8 @@ class Container:
             "outbox_worker",
             "summary_worker",
             "branch_summary_worker",
+            "idle_compaction_worker",
+            "conversation_delete_worker",
             "fact_worker",
             "embedding_worker",
         ):

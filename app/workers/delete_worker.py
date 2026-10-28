@@ -12,6 +12,7 @@ import uuid
 from aiokafka import AIOKafkaConsumer
 
 from app.core.config import settings
+from app.services import memory_policy
 from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.milvus_repository import MilvusRepository
 
@@ -93,7 +94,7 @@ class DeleteWorker:
                                 logger.info(f"Deleting all facts for conversation {conversation_id} user {user_id}")
                                 
                                 # Iterate over standard categories to find and purge matching conversation facts
-                                standard_categories = ["preferences", "habits", "hobbies", "general"]
+                                standard_categories = [*memory_policy.CATEGORIES, "habits", "hobbies", "general"]
                                 for cat in standard_categories:
                                     facts = self.cassandra_repo.get_facts(user_id, cat)
                                     for fact in facts:

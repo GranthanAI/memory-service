@@ -156,6 +156,15 @@ class FakeCassandra:
     def upsert_snapshot(self, snapshot):
         self.snapshots[snapshot["conversation_id"]] = dict(snapshot)
 
+    def list_anchors(self, conversation_id):
+        return [dict(a) for a in self.__dict__.get("anchors", {}).get(conversation_id, {}).values()]
+
+    def upsert_anchors(self, conversation_id, anchors):
+        store = self.__dict__.setdefault("anchors", {}).setdefault(conversation_id, {})
+        for a in anchors:
+            store[a.anchor_id] = {"anchor_id": a.anchor_id, "kind": a.kind, "text": a.text,
+                                  "source_message_id": a.source_message_id, "status": a.status}
+
     def archive_summary_version(self, row):
         archive = self.__dict__.setdefault("archive", {}).setdefault(row["conversation_id"], {})
         archive.setdefault(int(row["summary_version"]), dict(row))              # IF NOT EXISTS

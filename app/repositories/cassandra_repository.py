@@ -105,6 +105,21 @@ class CassandraRepository:
             LIMIT ?
         """)
 
+        # Anchor ledger (Migration9). Upserts are idempotent by (conversation_id, anchor_id).
+        self._upsert_anchor = self.session.prepare("""
+            INSERT INTO conversation_anchors (conversation_id, anchor_id, kind, anchor_text, source_message_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """)
+        self._list_anchors = self.session.prepare("""
+            SELECT conversation_id, anchor_id, kind, anchor_text, source_message_id, status, created_at
+            FROM conversation_anchors WHERE conversation_id = ?
+        """)
+
+        # Purge of everything memory-service holds for one conversation (conversation.deleted).
+        self._purge = [self.session.prepare(f"DELETE FROM {table} WHERE conversation_id = ?") for table in (
+            "conversation_recent_messages", "conversation_summaries", "conversation_summary_versions",
+            "conversation_snapshots", "conversation_anchors")]
+
         # Column-scoped snapshot writes. A whole-row upsert of a snapshot read earlier overwrites counters that other
         # writers bumped in between (the dispatcher's message_count / snapshot_version), so writers that own only a few
         # columns touch only those.
@@ -141,7 +156,7 @@ class CassandraRepository:
         self._get_facts = self.session.prepare("""
             SELECT user_id, category, fact_id, conversation_id,
                    statement, importance, fact_version, embedding_version,
-                   created_at, updated_at
+                   created_at, updated_at, status, superseded_by, valid_to, last_confirmed, last_used
             FROM user_facts
             WHERE user_id = ? AND category = ?
         """)
@@ -149,8 +164,16 @@ class CassandraRepository:
             INSERT INTO user_facts (
                 user_id, category, fact_id, conversation_id,
                 statement, importance, fact_version, embedding_version,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, status, last_confirmed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)
+        """)
+        self._retire_fact = self.session.prepare("""
+            UPDATE user_facts SET status = 'SUPERSEDED', superseded_by = ?, valid_to = ?, updated_at = ?
+            WHERE user_id = ? AND category = ? AND fact_id = ?
+        """)
+        self._touch_fact = self.session.prepare("""
+            UPDATE user_facts SET last_confirmed = ?
+            WHERE user_id = ? AND category = ? AND fact_id = ?
         """)
         self._delete_fact = self.session.prepare("""
             DELETE FROM user_facts
@@ -254,6 +277,24 @@ class CassandraRepository:
             snapshot.get("updated_at") or datetime.now(timezone.utc)
         ))
 
+    def list_anchors(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """The ledger, as dicts with keys kind / text / source_message_id / status / created_at / anchor_id."""
+        return [{"anchor_id": r.anchor_id, "kind": r.kind, "text": r.anchor_text, "source_message_id": r.source_message_id,
+                 "status": r.status, "created_at": r.created_at}
+                for r in self.session.execute(self._list_anchors, (conversation_id,))]
+
+    def upsert_anchors(self, conversation_id: str, anchors: List[Any]) -> None:
+        """Writes ledger entries (kind/text/source/status per Anchor). Idempotent."""
+        now = datetime.now(timezone.utc)
+        for a in anchors:
+            self.session.execute(self._upsert_anchor, (
+                conversation_id, a.anchor_id, a.kind, a.text, a.source_message_id, a.status, now))
+
+    def delete_conversation_data(self, conversation_id: str) -> None:
+        """Removes the message window, summary, archived summary versions and snapshot of a conversation."""
+        for statement in self._purge:
+            self.session.execute(statement, (conversation_id,))
+
     def archive_summary_version(self, row: Dict[str, Any]) -> None:
         """Archives a summary row (idempotent: IF NOT EXISTS, so an archived version is never rewritten)."""
         self.session.execute(self._archive_summary_version, (
@@ -345,10 +386,22 @@ class CassandraRepository:
 
     # ─── User Facts Operations ───────────────────────────────────────────────
 
-    def get_facts(self, user_id: str, category: str) -> List[Dict[str, Any]]:
+    def get_facts(self, user_id: str, category: str, include_inactive: bool = False) -> List[Dict[str, Any]]:
         """Reads all facts under a user's category partition."""
         rows = self.session.execute(self._get_facts, (user_id, category))
-        return [row._asdict() for row in rows]
+        facts = [row._asdict() for row in rows]
+        if include_inactive:
+            return facts
+        return [f for f in facts if (f.get("status") or "ACTIVE") == "ACTIVE"]       # NULL = rows from before Migration8
+
+    def retire_fact(self, user_id: str, category: str, fact_id: uuid.UUID, superseded_by: Optional[uuid.UUID]) -> None:
+        """Marks a fact SUPERSEDED (kept as history, never returned as current memory)."""
+        now = datetime.now(timezone.utc)
+        self.session.execute(self._retire_fact, (superseded_by, now, now, user_id, category, fact_id))
+
+    def touch_fact_confirmed(self, user_id: str, category: str, fact_id: uuid.UUID) -> None:
+        """The user said this again: recency now counts from here."""
+        self.session.execute(self._touch_fact, (datetime.now(timezone.utc), user_id, category, fact_id))
 
     def upsert_fact(self, fact: Dict[str, Any]) -> None:
         """Saves a structured long-term fact."""
@@ -362,7 +415,8 @@ class CassandraRepository:
             fact["fact_version"],
             fact["embedding_version"],
             fact.get("created_at") or datetime.now(timezone.utc),
-            fact.get("updated_at") or datetime.now(timezone.utc)
+            fact.get("updated_at") or datetime.now(timezone.utc),
+            fact.get("last_confirmed") or fact.get("created_at") or datetime.now(timezone.utc),
         ))
 
     def delete_fact(self, user_id: str, category: str, fact_id: uuid.UUID) -> None:

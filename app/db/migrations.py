@@ -148,6 +148,45 @@ class Migration7_SummaryVersions(Migration):
         """))
 
 
+class Migration8_FactLifecycle(Migration):
+    """Migration 8: facts are retired, not deleted. `status` (NULL / 'ACTIVE' = active, 'SUPERSEDED'), `superseded_by`
+    (the fact that replaced it), `valid_to` (when it stopped being true), `last_confirmed` (last time the user said it again)
+    and `last_used` (last time it was injected into an answer). All nullable and additive: existing rows are active facts
+    with unknown confirmation time. Re-running is safe."""
+    version = 8
+    description = "Add status/superseded_by/valid_to/last_confirmed/last_used to user_facts"
+
+    def upgrade(self, session) -> None:
+        for column, cql_type in (("status", "text"), ("superseded_by", "uuid"), ("valid_to", "timestamp"),
+                                 ("last_confirmed", "timestamp"), ("last_used", "timestamp")):
+            try:
+                session.execute(SimpleStatement(f"ALTER TABLE user_facts ADD {column} {cql_type}"))
+            except Exception as exc:  # column already present (re-run / fresh keyspace created with it)
+                if "already exist" not in str(exc).lower() and "conflicts with an existing column" not in str(exc).lower():
+                    raise
+
+
+class Migration9_AnchorLedger(Migration):
+    """Migration 9: the anchor ledger. Facts that must survive summarization (identifiers, decisions with reasons, constraints,
+    open items, corrections), one row per anchor with the message it came from. New table only; nothing existing is touched."""
+    version = 9
+    description = "Create conversation_anchors"
+
+    def upgrade(self, session) -> None:
+        session.execute(SimpleStatement("""
+            CREATE TABLE IF NOT EXISTS conversation_anchors (
+                conversation_id   TEXT,
+                anchor_id         TEXT,
+                kind              TEXT,
+                anchor_text       TEXT,
+                source_message_id TEXT,
+                status            TEXT,
+                created_at        TIMESTAMP,
+                PRIMARY KEY (conversation_id, anchor_id)
+            )
+        """))
+
+
 # List of all migrations in chronological order
 MIGRATIONS: list[Migration] = [
     Migration1_InitialSchema(),
@@ -157,6 +196,8 @@ MIGRATIONS: list[Migration] = [
     Migration5_SummaryWatermark(),
     Migration6_SummaryMetadata(),
     Migration7_SummaryVersions(),
+    Migration8_FactLifecycle(),
+    Migration9_AnchorLedger(),
 ]
 
 
@@ -219,6 +260,7 @@ class MigrationManager:
             "conversation_snapshots": ["conversation_id", "state", "message_count", "snapshot_metadata"],
             "conversation_summaries": ["conversation_id", "summary_text", "summary_version", "through_message_id", "through_created_at", "prompt_version", "llm_provider"],
             "conversation_summary_versions": ["conversation_id", "summary_version", "summary_text", "through_message_id"],
+            "conversation_anchors": ["conversation_id", "anchor_id", "kind", "anchor_text", "status"],
             "processed_events": ["event_id", "conversation_id", "processed_at"],
             "outbox_jobs": ["job_id", "status", "topic", "payload"],
             "outbox_processing_index": ["claimed_date", "claimed_at", "job_id", "created_at"],

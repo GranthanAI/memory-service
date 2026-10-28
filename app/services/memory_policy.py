@@ -61,6 +61,20 @@ _UPDATE = re.compile(
     r"updated?|moved to|replaced|from now on|rather than)\b",
     re.IGNORECASE,
 )
+# Narrower than _EXPLICIT on purpose: this decides to spend an extraction call on ONE message right away, so ordinary
+# "always"/"never" in conversation must not match; only phrases that ask to be remembered or set a standing rule do.
+_EXPLICIT_REQUEST = re.compile(
+    r"\b(remember (that|this|my|i)\b|don'?t forget|keep in mind|note that|from now on|"
+    r"(always|never) (use|answer|reply|respond|call me|address|write|give|show|explain)|"
+    r"my (name|favou?rite|preferred) (is|are))\b",
+    re.IGNORECASE,
+)
+
+
+def is_explicit_memory_request(text: str) -> bool:
+    return bool(_EXPLICIT_REQUEST.search(text or ""))
+
+
 _EXPLICIT = re.compile(r"\b(remember|always|never|from now on|prefers?|wants? me to)\b", re.IGNORECASE)
 
 _FILLER = re.compile(r"^(the )?user\s+(is\s+|has\s+|was\s+)?", re.IGNORECASE)

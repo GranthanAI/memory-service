@@ -114,16 +114,27 @@ COMPACTION_RESULTS = Counter(
     "memory_compaction_results_total",
     "Outcome of one summary update",
     ["outcome"],     # committed | nothing_new | refined | consolidated | fallback_trimmed | failed | lost_race
+                     # | anchor_lost (a pinned fact / open item vanished) | unsupported_entity (an invented name or number)
 )
 BRANCH_SUMMARY_RESULTS = Counter(
     "memory_branch_summary_total",
     "Outcome of ensuring a parent summary exists at a new branch point",
     ["outcome"],     # not_a_branch | present | requested | unavailable | skipped | error
 )
+IDLE_COMPACTION_RESULTS = Counter(
+    "memory_idle_compaction_total",
+    "Outcome of the idle-conversation sweep",
+    ["outcome"],     # requested | nothing_new | busy | no_snapshot | error
+)
+CONVERSATION_DELETE_RESULTS = Counter(
+    "memory_conversation_delete_total",
+    "Outcome of purging a deleted conversation",
+    ["outcome"],     # purged | skipped | ignored | error
+)
 MEMORY_UPDATE_RESULTS = Counter(
     "memory_update_ingest_results_total",
     "Outcome of ingesting one memory.update.requested event",
-    ["outcome"],     # ingested | retry_scheduled | dead_lettered | rewound
+    ["outcome"],     # ingested | retry_scheduled | dead_lettered | rewound | answer_replaced | explicit_memory_queued
 )
 COMPACTION_SECONDS = Histogram(
     "memory_compaction_seconds",
