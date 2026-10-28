@@ -1,4 +1,4 @@
-.PHONY: help sync run infra infra-down lint format test clean
+.PHONY: help sync run infra infra-down lint format test eval clean
 
 # Help command to display available options
 help:
@@ -10,7 +10,12 @@ help:
 	@echo "  make lint          - Check code style using black, isort, and flake8"
 	@echo "  make format        - Auto-format code using black and isort"
 	@echo "  make test          - Run tests using pytest"
+	@echo "  make eval          - Offline memory evaluation (recall, branch leakage, fact supersede); no model calls"
 	@echo "  make clean         - Clean up cached files and directories"
+
+# Offline memory evaluation: deterministic fakes, no network, no paid model (options: SEED=, CYCLES=, LENGTH=, CONVERSATIONS=)
+eval:
+	uv run python -m evaluation.run --seed $(or $(SEED),7) --cycles $(or $(CYCLES),6) --length $(or $(LENGTH),120) --conversations $(or $(CONVERSATIONS),5)
 
 # Sync dependencies using uv
 sync:

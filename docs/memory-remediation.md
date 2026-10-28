@@ -59,9 +59,14 @@ Not verified yet (confirm before fixing in its phase): P0-4 and everything in Ph
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 0 | done (see baseline below) | repro tests added, no fixes |
-| 1 | done (pending full-suite confirmation, see below) | P0-1 and P0-2 fixed; consumer changed before producer |
-| 2-7 | not started | |
+| 0 | done | baseline + repro tests |
+| 1 | done | message identity/ordering; branch validity by UUIDv7 time (see Phase 1 notes) |
+| 2 | done | P0-3 column-scoped/CAS snapshot writes; P0-4 ingestion retry/DLQ; watermark-relative triggers; derived + renewed in-flight TTL; Migration6 summary metadata; one-object summary cache |
+| 3 | done | P0-6 oldest-first history trimming; P0-5 retrieved history rendered; role-separated history (flag, default OFF); head+tail compaction note; read-your-writes merge; GetMemoryContext budget; fact label |
+| 4 | done | Migration7 immutable summary versions; version choice + raw-message bridge; bounded summary jobs; branch-creation worker |
+| 5 | done | Migration8 fact lifecycle; LLM-judged soft supersede; reconcile; explicit fast path; idle trigger; consumed-message extraction; conversation.deleted consumer; regenerated answers; core profile; previous-turn query |
+| 6 | done | Migration9 anchor ledger; validation + one retry; per-section trimming; `anchor_lost` / `unsupported_entity` outcomes; anchors over gRPC |
+| 7 | done | `make eval` (offline, deterministic) |
 
 ## Phase 0 baseline (2026-10-28, all on `main`)
 
@@ -98,6 +103,47 @@ Repro tests (`tests/unit/test_memory_remediation_repro.py`, all fail without `xf
   very latest turn is not shown to a branch made at that turn (publish time is after the message time, so it is not
   provable). New-format summaries do not have this limit.
 - **Rollout order:** deploy memory-service first, then llm-service.
+
+## Phase 2-7 notes
+
+**Deploy order:** memory-service first (it accepts old and new event shapes), then llm-service, then conversation-service.
+Cassandra migrations 6-9 run at memory-service startup (additive, re-runnable). The proto change (`Anchor`, `anchors = 11`) is additive.
+
+**New configuration (all in `app/core/config.py`; defaults in brackets):**
+`LLM_MODEL_VERSION` [""], `ANCESTOR_VERSION_LOOKBACK` [50], `ANCESTOR_BRIDGE_MAX_TOKENS` [1500], `CORE_PROFILE_ENABLED` [true],
+`RETRIEVAL_INCLUDE_PREVIOUS_TURN` [true], `EXPLICIT_MEMORY_FAST_PATH` [true], `IDLE_COMPACTION_ENABLED` [true],
+`IDLE_COMPACTION_MINUTES` [30], `DELETE_FACTS_WITH_CONVERSATION` [false], `ANCHOR_LEDGER_ENABLED` [true],
+`ANCHOR_LLM_EXTRACTION` [true], `ANCHOR_RENDER_MAX_CHARS` [3000], `SUMMARY_VALIDATION_RETRIES` [1], `HISTORY_SEARCH_ENABLED` [true].
+llm-service: `PROMPT_HISTORY_AS_MESSAGES` [**false**: changes every prompt's shape; enable after a canary],
+`PROMPT_RETRIEVED_HISTORY_ENABLED` [true].
+
+**Existing tests that had to change because the design changed (assertions kept otherwise):** `test_branch_summaries` (UUIDv7 stand-ins
+instead of fake "v7-looking" ids), `test_db` (new Cassandra settings), `test_memory_service` (state change is a compare-and-set, not a
+whole-row upsert), `test_long_memory_service` / `test_memory_quality` (facts are retired, not deleted; corrections need a judge),
+`test_event_history` in conversation-service (history entries carry `message_id`).
+
+**Decisions taken without asking (change them if you disagree):**
+1. Deleting a conversation purges its messages, summaries, summary versions, snapshot and caches but KEEPS the facts learned from it
+   (`DELETE_FACTS_WITH_CONVERSATION=false`). A branch made from a deleted conversation loses the inherited *summary* of it.
+2. Role-separated history ships dark (flag off).
+3. Cassandra cannot make one conditional batch across two tables, so a superseded summary is archived first (idempotent), then replaced.
+
+**Known limits / not done:**
+- Turns stored before Phase 1 with equal timestamps keep their old order; a legacy summary through the latest turn is not shown to a branch
+  made at that turn (not provable); a regenerated answer only replaces the raw message (summaries are not edited retroactively) and only when
+  the event carries real ids.
+- `last_used` is stored but not yet written on retrieval (recency uses `last_confirmed`).
+- The anchor ledger is not added to *inherited* (ancestor) summaries; a child sees the ancestor summary version + bridge only.
+- The entity check is deterministic (identifiers, numbers, versions, paths, URLs): it does not catch an invented *name* in prose.
+- Branch-creation and conversation-delete consumers are best effort / at-least-once without a DLQ of their own.
+- `evaluation.run --real` (paid model) is a stub that refuses to run; the harness is offline-only.
+
+## Phase 7: evaluation harness
+
+`make eval` (or `uv run python -m evaluation.run`): synthetic conversations with planted identifiers, constraints, reversed decisions and open
+items; N compaction cycles with a deliberately lossy deterministic summarizer; reports recall of planted facts with and without the
+ledger, leakage across a branch point, and fact-supersede precision/recall with a perfect and a noisy judge. Reference run (seed 7, 6 cycles,
+120 messages, 5 conversations): mean recall 0.36 without the ledger, 1.00 with it; 0 facts leaked across the branch; supersede precision 1.00.
 
 ## Proposal (out of scope): multilingual embedding model
 
