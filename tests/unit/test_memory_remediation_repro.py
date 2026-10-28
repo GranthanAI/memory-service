@@ -132,11 +132,13 @@ class SnapshotStore:
     async def save_snapshot(self, snap):
         self.snapshot = dict(snap)
 
+    async def update_snapshot_summary_fields(self, cid, summary_version, last_summary_msg_id):
+        self.snapshot["summary_version"], self.snapshot["last_summary_msg_id"] = summary_version, last_summary_msg_id
+
     async def invalidate_conversation(self, cid):
         pass
 
 
-@pytest.mark.xfail(strict=True, reason="P0-3: save_snapshot overwrites the whole row read before the LLM call")
 async def test_summary_commit_does_not_reset_counters_bumped_during_the_llm_call():
     store = SnapshotStore()
     messages = [{"message_id": f"m{i}", "role": "user", "content": f"message {i}",

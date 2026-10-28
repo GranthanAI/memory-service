@@ -62,6 +62,9 @@ class FakeMemoryRepo:
     async def save_snapshot(self, snap):
         self.snapshot = dict(snap)
 
+    async def update_snapshot_summary_fields(self, cid, summary_version, last_summary_msg_id):
+        self.snapshot["summary_version"], self.snapshot["last_summary_msg_id"] = summary_version, last_summary_msg_id
+
     async def invalidate_conversation(self, cid):
         self.invalidated += 1
 

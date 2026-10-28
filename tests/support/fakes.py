@@ -156,6 +156,17 @@ class FakeCassandra:
     def upsert_snapshot(self, snapshot):
         self.snapshots[snapshot["conversation_id"]] = dict(snapshot)
 
+    def update_snapshot_summary_fields(self, conversation_id, summary_version, last_summary_msg_id):
+        snap = self.snapshots.setdefault(conversation_id, {"conversation_id": conversation_id})
+        snap["summary_version"], snap["last_summary_msg_id"] = summary_version, last_summary_msg_id
+
+    def update_snapshot_state_if_current(self, conversation_id, state, new_version, expected_version):
+        snap = self.snapshots.get(conversation_id)
+        if not snap or snap.get("snapshot_version") != expected_version:
+            return False
+        snap["state"], snap["snapshot_version"] = state, new_version
+        return True
+
     def insert_outbox_job(self, job):
         self.outbox.append(dict(job))
 

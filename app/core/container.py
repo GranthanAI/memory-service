@@ -188,7 +188,8 @@ class Container:
             scheduler=self.compaction_scheduler,
         )
 
-        self.memory_update_worker = MemoryUpdateWorker(dispatcher=self.event_dispatcher)
+        self.memory_update_worker = MemoryUpdateWorker(
+            dispatcher=self.event_dispatcher, cassandra_repo=self.cassandra_repo)
         await self.memory_update_worker.start()
 
         self.outbox_worker = OutboxDaemonWorker(

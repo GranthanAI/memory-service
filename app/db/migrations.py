@@ -106,6 +106,22 @@ class Migration5_SummaryWatermark(Migration):
                     raise
 
 
+class Migration6_SummaryMetadata(Migration):
+    """Migration 6: summaries record which prompt produced them (`prompt_version`) and which provider served the model
+    (`llm_provider`); `model_version` used to hold the provider name by mistake. Additive and nullable: old rows read as
+    "unknown". Re-running is safe."""
+    version = 6
+    description = "Add prompt_version / llm_provider to conversation_summaries"
+
+    def upgrade(self, session) -> None:
+        for column, cql_type in (("prompt_version", "text"), ("llm_provider", "text")):
+            try:
+                session.execute(SimpleStatement(f"ALTER TABLE conversation_summaries ADD {column} {cql_type}"))
+            except Exception as exc:  # column already present (re-run / fresh keyspace created with it)
+                if "already exist" not in str(exc).lower() and "conflicts with an existing column" not in str(exc).lower():
+                    raise
+
+
 # List of all migrations in chronological order
 MIGRATIONS: list[Migration] = [
     Migration1_InitialSchema(),
@@ -113,6 +129,7 @@ MIGRATIONS: list[Migration] = [
     Migration3_AddCreatedAtToProcessingIndex(),
     Migration4_UserMemoryControls(),
     Migration5_SummaryWatermark(),
+    Migration6_SummaryMetadata(),
 ]
 
 
@@ -173,7 +190,7 @@ class MigrationManager:
         # Map of expected table names and a list of crucial columns that must be present
         expected_tables = {
             "conversation_snapshots": ["conversation_id", "state", "message_count", "snapshot_metadata"],
-            "conversation_summaries": ["conversation_id", "summary_text", "summary_version", "through_message_id", "through_created_at"],
+            "conversation_summaries": ["conversation_id", "summary_text", "summary_version", "through_message_id", "through_created_at", "prompt_version", "llm_provider"],
             "processed_events": ["event_id", "conversation_id", "processed_at"],
             "outbox_jobs": ["job_id", "status", "topic", "payload"],
             "outbox_processing_index": ["claimed_date", "claimed_at", "job_id", "created_at"],

@@ -23,9 +23,11 @@ def mock_repos():
     
     redis_repo.get_snapshot = AsyncMock(return_value=None)
     redis_repo.set_snapshot = AsyncMock()
+    redis_repo.invalidate_conversation = AsyncMock()
     
     cassandra_repo.get_snapshot = MagicMock(return_value=None)
     cassandra_repo.upsert_snapshot = MagicMock()
+    cassandra_repo.update_snapshot_state_if_current = MagicMock(return_value=True)   # compare-and-set applied
     cassandra_repo.insert_retry_job = MagicMock()
     
     memory_repo = MemoryRepository(cassandra_repo, redis_repo)
@@ -191,10 +193,12 @@ async def test_memory_service_handle_failure_threshold_reached(mock_repos):
         max_retries=5
     )
 
-    # Should upsert snapshot state to FAILED
-    cassandra_repo.upsert_snapshot.assert_called_once()
-    updated_snap = cassandra_repo.upsert_snapshot.call_args[0][0]
-    assert updated_snap["state"] == MemoryState.FAILED
+    # Should move the snapshot state to FAILED with a column-scoped compare-and-set (not a whole-row upsert, which
+    # would overwrite counters bumped concurrently)
+    cassandra_repo.upsert_snapshot.assert_not_called()
+    cassandra_repo.update_snapshot_state_if_current.assert_called_once()
+    args = cassandra_repo.update_snapshot_state_if_current.call_args[0]
+    assert args[0] == "conv-1" and args[1] == MemoryState.FAILED.value and args[2] == 2 and args[3] == 1
 
     # Should register a FAILED retry job (DLQ audit row)
     cassandra_repo.insert_retry_job.assert_called_once()

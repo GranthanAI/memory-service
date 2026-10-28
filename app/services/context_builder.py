@@ -82,6 +82,22 @@ class ContextBuilder:
             )
             return [], False
 
+    async def _load_summary(self, conversation_id: str):
+        """(summary text, watermark meta) taken from ONE record, so the text of one summary version can never be paired
+        with the watermark of another (the text used to come from the Redis cache and the watermark from Cassandra).
+        Collaborators without record support (older callers/tests) fall back to the text + a separate Cassandra read."""
+        try:
+            record = await self.retrieval_service.get_or_hydrate_summary_record(conversation_id)
+        except Exception:
+            record = None
+        if isinstance(record, dict):
+            meta = {"summary_version": record.get("summary_version"),
+                    "through_message_id": record.get("through_message_id"),
+                    "through_created_at": record.get("through_created_at")}
+            return record.get("text") or "", meta
+        text = await self.retrieval_service.get_or_hydrate_summary(conversation_id)
+        return text, (self._summary_meta(conversation_id) if text else {})
+
     def _summary_meta(self, conversation_id: str) -> Dict[str, Any]:
         try:
             row = self.retrieval_service.memory_repo.cassandra_repo.get_summary(conversation_id) or {}
@@ -139,7 +155,7 @@ class ContextBuilder:
         """
         # Define tasks for concurrent execution
         snapshot_task = self.retrieval_service.get_or_hydrate_snapshot(conversation_id)
-        summary_task = self.retrieval_service.get_or_hydrate_summary(conversation_id)
+        summary_task = self._load_summary(conversation_id)
         messages_task = self.retrieval_service.get_or_hydrate_recent_messages(
             conversation_id,
             limit=settings.SHORT_TERM_MESSAGE_LIMIT
@@ -158,7 +174,7 @@ class ContextBuilder:
             facts_task = asyncio.sleep(0, result=[])
 
         # Execute concurrently
-        snapshot, summary, messages, parents_result, facts = await asyncio.gather(
+        snapshot, (summary, summary_meta), messages, parents_result, facts = await asyncio.gather(
             snapshot_task,
             summary_task,
             messages_task,
@@ -193,7 +209,7 @@ class ContextBuilder:
                 }
 
         # Recent turns: chronological, without what the summary already covers, with no hole before the unsummarised part.
-        summary_meta = self._summary_meta(conversation_id) if summary else {}
+        summary_meta = summary_meta if summary else {}
         messages, window_info = await self._assemble_messages(
             user_id=resolved_user_id or user_id, conversation_id=conversation_id, window=messages,
             summary=summary or "", summary_meta=summary_meta)

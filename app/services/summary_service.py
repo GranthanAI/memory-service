@@ -173,16 +173,39 @@ class SummaryService:
 
         if committed:
             snapshot["updated_at"] = datetime.now(timezone.utc)
-            await self.memory_repo.save_snapshot(snapshot)
+            # Only the summary columns are written. The snapshot row was read before the model call; writing it back
+            # whole would reset message_count / snapshot_version that the dispatcher bumped in the meantime.
+            await self.memory_repo.update_snapshot_summary_fields(
+                conversation_id, snapshot["summary_version"], snapshot["last_summary_msg_id"])
             await self.memory_repo.invalidate_conversation(conversation_id)
-            if self.scheduler is not None:
-                await self.scheduler.reset(conversation_id)       # pressure restarts from the new watermark
         else:
             COMPACTION_RESULTS.labels(outcome="nothing_new").inc()
             logger.info(f"No new messages after the summary watermark for '{conversation_id}'; no new version.")
-            if self.scheduler is not None:
-                await self.scheduler.reset(conversation_id)       # a duplicate/late request must not keep the guard set
+        if self.scheduler is not None:
+            # Pressure restarts from the NEW watermark: messages that arrived while the job ran are still pending.
+            pending_messages, pending_tokens = self._pending_after_watermark(conversation_id)
+            await self.scheduler.reset(conversation_id, pending_messages, pending_tokens)
         return snapshot
+
+    def _pending_after_watermark(self, conversation_id: str) -> Tuple[int, int]:
+        """(messages, tokens) stored after the committed watermark, counted from the durable rows."""
+        try:
+            row = self.cassandra_repo.get_summary(conversation_id) or {}
+            fetched = self.cassandra_repo.get_recent_messages(conversation_id, limit=FETCH_LIMIT)
+            new, _gap = select_new_messages(fetched, row.get("through_message_id"), row.get("through_created_at"))
+        except Exception as exc:
+            logger.warning("could not recount pending messages (%s)", type(exc).__name__)
+            return 0, 0
+        return len(new), sum(self.counter.count(m.get("content") or "") + 4 for m in new)
+
+    async def _renew_inflight(self, conversation_id: str) -> None:
+        renew = getattr(self.scheduler, "renew", None)
+        if renew is None:
+            return
+        try:
+            await renew(conversation_id)
+        except Exception as exc:                                  # best effort: the TTL is already generous
+            logger.warning("could not renew the compaction guard (%s)", type(exc).__name__)
 
     # ─── fitting ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -252,6 +275,7 @@ class SummaryService:
                 return None
             batch = new[:BATCH_SIZE]
 
+            await self._renew_inflight(conversation_id)               # the in-flight guard must outlive a slow model call
             response = await self.llm_service.summarize(SummarizeRequest(
                 previous_summary=previous_text,
                 new_messages=[LLMMessage(role=m["role"], content=m["content"]) for m in batch],
@@ -264,12 +288,15 @@ class SummaryService:
                 "summary_text": text,
                 "summary_version": (expected_version or 0) + 1,
                 "model_name": settings.LLM_MODEL,
-                "model_version": settings.LLM_PROVIDER,
+                "model_version": settings.LLM_MODEL_VERSION or settings.LLM_MODEL,
+                "llm_provider": settings.LLM_PROVIDER,
+                "prompt_version": settings.SUMMARY_PROMPT_VERSION,
                 "generated_at": datetime.now(timezone.utc),
                 "through_message_id": str(last["message_id"]),
                 "through_created_at": _as_utc(last.get("created_at")),
             }
             if self.cassandra_repo.write_summary_if_current(record, expected_version):
+                await self._renew_inflight(conversation_id)
                 COMPACTION_RESULTS.labels(outcome=fit_outcome).inc()
                 COMPACTION_SOURCE_MESSAGES.observe(len(batch))
                 SUMMARY_TOKENS.observe(self.counter.count(text))

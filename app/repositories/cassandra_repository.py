@@ -62,7 +62,7 @@ class CassandraRepository:
         self._get_summary = self.session.prepare("""
             SELECT conversation_id, summary_text, summary_version,
                    model_name, model_version, generated_at,
-                   through_message_id, through_created_at
+                   through_message_id, through_created_at, prompt_version, llm_provider
             FROM conversation_summaries
             WHERE conversation_id = ?
         """)
@@ -78,15 +78,31 @@ class CassandraRepository:
         self._insert_summary_cas = self.session.prepare("""
             INSERT INTO conversation_summaries (
                 conversation_id, summary_text, summary_version, model_name, model_version,
-                generated_at, through_message_id, through_created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS
+                generated_at, through_message_id, through_created_at, prompt_version, llm_provider
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS
         """)
         self._update_summary_cas = self.session.prepare("""
             UPDATE conversation_summaries
             SET summary_text = ?, summary_version = ?, model_name = ?, model_version = ?,
-                generated_at = ?, through_message_id = ?, through_created_at = ?
+                generated_at = ?, through_message_id = ?, through_created_at = ?,
+                prompt_version = ?, llm_provider = ?
             WHERE conversation_id = ?
             IF summary_version = ?
+        """)
+
+        # Column-scoped snapshot writes. A whole-row upsert of a snapshot read earlier overwrites counters that other
+        # writers bumped in between (the dispatcher's message_count / snapshot_version), so writers that own only a few
+        # columns touch only those.
+        self._update_snap_summary = self.session.prepare("""
+            UPDATE conversation_snapshots
+            SET summary_version = ?, last_summary_msg_id = ?, updated_at = ?
+            WHERE conversation_id = ?
+        """)
+        self._update_snap_state_cas = self.session.prepare("""
+            UPDATE conversation_snapshots
+            SET state = ?, snapshot_version = ?, updated_at = ?
+            WHERE conversation_id = ?
+            IF snapshot_version = ?
         """)
 
         # ─── Recent Messages DML ─────────────────────────────────────────────
@@ -223,6 +239,23 @@ class CassandraRepository:
             snapshot.get("updated_at") or datetime.now(timezone.utc)
         ))
 
+    def update_snapshot_summary_fields(
+        self, conversation_id: str, summary_version: int, last_summary_msg_id: Optional[str]
+    ) -> None:
+        """Records the committed summary on the snapshot WITHOUT touching message_count / snapshot_version / state."""
+        self.session.execute(self._update_snap_summary, (
+            summary_version, last_summary_msg_id, datetime.now(timezone.utc), conversation_id,
+        ))
+
+    def update_snapshot_state_if_current(
+        self, conversation_id: str, state: str, new_version: int, expected_version: int
+    ) -> bool:
+        """Sets `state` only if snapshot_version is still `expected_version`. False = someone else wrote first."""
+        result = self.session.execute(self._update_snap_state_cas, (
+            state, new_version, datetime.now(timezone.utc), conversation_id, expected_version,
+        ))
+        return bool(result.was_applied)
+
     # ─── Summary Operations ──────────────────────────────────────────────────
 
     def get_summary(self, conversation_id: str) -> Optional[Dict[str, Any]]:
@@ -251,12 +284,14 @@ class CassandraRepository:
                 summary["conversation_id"], summary["summary_text"], summary["summary_version"],
                 summary["model_name"], summary["model_version"], generated_at,
                 summary.get("through_message_id"), summary.get("through_created_at"),
+                summary.get("prompt_version"), summary.get("llm_provider"),
             ))
         else:
             result = self.session.execute(self._update_summary_cas, (
                 summary["summary_text"], summary["summary_version"], summary["model_name"],
                 summary["model_version"], generated_at, summary.get("through_message_id"),
-                summary.get("through_created_at"), summary["conversation_id"], expected_version,
+                summary.get("through_created_at"), summary.get("prompt_version"), summary.get("llm_provider"),
+                summary["conversation_id"], expected_version,
             ))
         return bool(result.was_applied)
 

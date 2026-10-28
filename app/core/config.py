@@ -2,6 +2,10 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Model batches one summary job may run (mirrors summary_service.MAX_BATCHES; kept here to avoid an import cycle).
+COMPACTION_MAX_BATCHES = 5
+
+
 class SystemSettings(BaseSettings):
     """
     Validates and stores all service execution configurations.
@@ -138,6 +142,7 @@ class SystemSettings(BaseSettings):
     LLM_PROVIDER: str = "groq"
     GROQ_API_KEY: str = ""
     LLM_MODEL: str = "openai/gpt-oss-20b"
+    LLM_MODEL_VERSION: str = ""           # optional pinned version/revision; stored with each summary (empty = LLM_MODEL)
     LLM_TIMEOUT_SECONDS: float = 60.0
     LLM_MAX_RETRIES: int = 3
     LLM_TEMPERATURE: float = 0.2
@@ -149,6 +154,8 @@ class SystemSettings(BaseSettings):
     # context pressure much faster than 20 short ones). One request per conversation is in flight at a time.
     COMPACTION_TRIGGER_TOKENS: int = 6000
     COMPACTION_MIN_NEW_MESSAGES: int = 6
+    # Floor for the in-flight guard of a summary job. The effective TTL is never shorter than a worst-case job (see
+    # `compaction_inflight_ttl`), and the running job also renews it after every batch.
     COMPACTION_INFLIGHT_TTL_SECONDS: int = 120
     COMPACTION_PENDING_TTL_SECONDS: int = 604800
     # A summary is validated in TOKENS with the real tokenizer. The default equals the previous fixed limit
@@ -163,7 +170,9 @@ class SystemSettings(BaseSettings):
     CONTEXT_MAX_UNSUMMARIZED_MESSAGES: int = 120
     CONTEXT_STALE_MESSAGES: int = 40                    # uncovered messages beyond this = the summary is stale
     # Question-aware retrieval of older ORIGINAL messages of the same conversation (lexical, no new index).
-    HISTORY_SEARCH_ENABLED: bool = False                # OFF until llm-service renders retrieved_history in the prompt
+    # ON: llm-service renders `retrieved_history` ("Earlier Messages From This Conversation"). Deploy llm-service first
+    # (an older llm-service ignores the field, so the extra work would be wasted, not harmful).
+    HISTORY_SEARCH_ENABLED: bool = False
     HISTORY_SEARCH_MAX_MESSAGES: int = 400
     HISTORY_SEARCH_TOP_K: int = 3
     HISTORY_SEARCH_MIN_COVERAGE: float = 0.5            # share of the question's distinctive terms a hit must contain
@@ -195,6 +204,14 @@ class SystemSettings(BaseSettings):
         if not 0.0 < self.HISTORY_SEARCH_RECALL_MIN_COVERAGE <= self.HISTORY_SEARCH_MIN_COVERAGE <= 1.0:
             raise ValueError("HISTORY_SEARCH coverage thresholds must satisfy 0 < recall <= default <= 1")
         return self
+
+    @property
+    def compaction_inflight_ttl(self) -> int:
+        """Seconds a summary job may stay 'in flight': at least COMPACTION_INFLIGHT_TTL_SECONDS and never shorter than
+        a worst-case job (every batch, every model attempt, plus the shortening passes, each up to the LLM timeout)."""
+        calls_per_batch = (self.LLM_MAX_RETRIES + 1) * (1 + self.SUMMARY_MAX_REFINEMENTS + 1)
+        worst_case = int(self.LLM_TIMEOUT_SECONDS * calls_per_batch * COMPACTION_MAX_BATCHES) + 30
+        return max(self.COMPACTION_INFLIGHT_TTL_SECONDS, worst_case)
 
     @model_validator(mode="after")
     def _validate_cassandra_config(self):

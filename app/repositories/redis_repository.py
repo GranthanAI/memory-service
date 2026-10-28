@@ -6,6 +6,7 @@ All summaries are zstd-compressed, snapshots are stored as hashes, and recent
 messages are stored as sliding JSON lists.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -123,10 +124,63 @@ class RedisRepository:
             # Let's store base64 encoded compressed bytes as a string. That is 100% safe.
             import base64
             decoded = base64.b64decode(compressed.encode("utf-8"))
-            return decompress_to_string(decoded)
+            text = decompress_to_string(decoded)
+            record = self._parse_summary_record(text)
+            return record["text"] if record else text
         except Exception as e:
             logger.error(f"Error fetching summary cache for {conversation_id}: {e}")
             return None
+
+    @staticmethod
+    def _parse_summary_record(raw: str) -> Optional[Dict[str, Any]]:
+        """A cached summary entry is either plain text (written before records existed) or a JSON record holding the
+        text together with its version and watermark. Returns the record, or None for plain text."""
+        if not raw.startswith('{"v":1'):
+            return None
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            return None
+        return record if isinstance(record, dict) and "text" in record else None
+
+    async def get_summary_record(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Summary text + version + watermark cached as one entry; None for a miss or a legacy plain-text entry."""
+        key = self._summary_key(conversation_id)
+        try:
+            encoded = await self.client.get(key)
+            if not encoded:
+                return None
+            import base64
+            record = self._parse_summary_record(decompress_to_string(base64.b64decode(encoded.encode("utf-8"))))
+            if record is None:
+                return None
+            return {
+                "text": record["text"],
+                "summary_version": int(record.get("summary_version") or 0),
+                "through_message_id": record.get("through_message_id"),
+                "through_created_at": datetime.fromisoformat(record["through_created_at"])
+                if record.get("through_created_at") else None,
+            }
+        except Exception as e:
+            logger.error(f"Error fetching summary record cache for {conversation_id}: {e}")
+            return None
+
+    async def set_summary_record(self, conversation_id: str, record: Dict[str, Any]) -> None:
+        """Caches text, version and watermark together (one key, one write)."""
+        created = record.get("through_created_at")
+        payload = json.dumps({
+            "v": 1,
+            "text": record["text"],
+            "summary_version": int(record.get("summary_version") or 0),
+            "through_message_id": record.get("through_message_id"),
+            "through_created_at": created.isoformat() if hasattr(created, "isoformat") else created,
+        }, separators=(",", ":"))
+        try:
+            import base64
+            encoded = base64.b64encode(compress_string(payload)).decode("utf-8")
+            await self.client.set(self._summary_key(conversation_id), encoded, ex=self.ttl)
+        except Exception as e:
+            logger.error(f"Error caching summary record for {conversation_id}: {e}")
 
     async def set_summary(self, conversation_id: str, summary_text: str) -> None:
         """

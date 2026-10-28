@@ -67,17 +67,38 @@ class CompactionScheduler:
             return True
         try:
             return bool(await self.redis.set(self._k("inflight", conversation_id), "1",
-                                             ex=self.cfg.COMPACTION_INFLIGHT_TTL_SECONDS, nx=True))
+                                             ex=self._inflight_ttl(), nx=True))
         except Exception:
             return True
 
-    async def reset(self, conversation_id: str) -> None:
-        """Called when a summary was committed: the pressure restarts from the new watermark."""
+    def _inflight_ttl(self) -> int:
+        ttl = getattr(self.cfg, "compaction_inflight_ttl", None)
+        return int(ttl) if isinstance(ttl, (int, float)) else self.cfg.COMPACTION_INFLIGHT_TTL_SECONDS
+
+    async def renew(self, conversation_id: str) -> None:
+        """Extends the in-flight guard of a running job (called after every model batch)."""
         if self.redis is None:
             return
         try:
-            await self.redis.delete(self._k("msgs", conversation_id), self._k("tokens", conversation_id),
-                                    self._k("inflight", conversation_id))
+            await self.redis.expire(self._k("inflight", conversation_id), self._inflight_ttl())
+        except Exception as exc:
+            logger.warning("could not renew the compaction guard (%s)", type(exc).__name__)
+
+    async def reset(self, conversation_id: str, pending_messages: int = 0, pending_tokens: int = 0) -> None:
+        """Called when a summary job ended. The pressure restarts from the new watermark: the counters are set to what
+        is actually pending after it (messages that arrived while the job ran are NOT forgotten), and the in-flight
+        guard is released."""
+        if self.redis is None:
+            return
+        try:
+            msgs_key, tokens_key = self._k("msgs", conversation_id), self._k("tokens", conversation_id)
+            if pending_messages > 0:
+                ttl = self.cfg.COMPACTION_PENDING_TTL_SECONDS
+                await self.redis.set(msgs_key, int(pending_messages), ex=ttl)
+                await self.redis.set(tokens_key, int(pending_tokens), ex=ttl)
+                await self.redis.delete(self._k("inflight", conversation_id))
+            else:
+                await self.redis.delete(msgs_key, tokens_key, self._k("inflight", conversation_id))
         except Exception as exc:
             logger.warning("could not reset compaction accounting (%s)", type(exc).__name__)
 

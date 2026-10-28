@@ -58,6 +58,14 @@ class RetrievalService:
             logger.error(f"Error fetching recent messages for conversation {conversation_id}: {e}")
             return []
 
+    async def get_or_hydrate_summary_record(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Summary text, version and watermark as one object from one source (see MemoryRepository.get_summary_record)."""
+        try:
+            return await self.memory_repo.get_summary_record(conversation_id)
+        except Exception as e:
+            logger.error(f"Error fetching summary record for conversation {conversation_id}: {e}")
+            return None
+
     async def get_or_hydrate_summary(self, conversation_id: str) -> Optional[str]:
         """
         Retrieves summary text from memory repository (handles read-through zstd cached summary).

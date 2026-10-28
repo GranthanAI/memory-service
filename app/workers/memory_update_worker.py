@@ -29,12 +29,14 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 from aiokafka import AIOKafkaConsumer
 
 from app.core.config import settings
 from app.events.dispatcher import EventDispatcher
 from app.services.summary_service import _as_utc
+from app.core.metrics import MEMORY_UPDATE_RESULTS
 from app.utils.message_ids import uuid7_datetime
 
 logger = logging.getLogger("memory_service.workers.memory_update_worker")
@@ -79,10 +81,22 @@ def turn_identity(payload: dict) -> dict:
     }
 
 
+# Ingestion failures are retried through the same retry_jobs table the other workers use (RetryScheduler re-publishes the
+# original payload to the memory-update topic after an exponential backoff); after this many attempts the job is parked
+# as FAILED (the dead-letter record) instead of being retried forever.
+MAX_INGEST_ATTEMPTS = 5
+JOB_TYPE = "memory_update"
+
+
 class MemoryUpdateWorker:
     """
     Background worker that consumes memory.update.requested events and feeds
     them into EventDispatcher as a user-turn + assistant-turn pair.
+
+    Failure handling: a turn is two dispatches, each atomic and idempotent by event id. If either fails, the turn is
+    NOT dropped: a retry job carrying the original payload is written (reprocessing re-dispatches both sides; the side
+    that already succeeded is skipped as a duplicate, so a half-stored turn is completed). The offset is committed only
+    after the retry job is durable; if even that fails the offset is not committed and the consumer rewinds.
     """
 
     def __init__(
@@ -90,8 +104,10 @@ class MemoryUpdateWorker:
         dispatcher: EventDispatcher,
         bootstrap_servers: str = settings.KAFKA_BOOTSTRAP_SERVERS,
         group_id: str = "memory-update-worker-group",
+        cassandra_repo=None,
     ):
         self.dispatcher = dispatcher
+        self.cassandra_repo = cassandra_repo        # retry/DLQ records (retry_jobs); None disables retries (old behaviour)
         self.bootstrap_servers = bootstrap_servers
         self.group_id = group_id
         self._consumer = None
@@ -122,17 +138,72 @@ class MemoryUpdateWorker:
 
                 for tp, messages in msg_batch.items():
                     for msg in messages:
-                        try:
-                            payload = json.loads(msg.value.decode("utf-8"))
-                            await self._process_turn(payload)
-                        except Exception as e:
-                            logger.error(f"MemoryUpdateWorker failed to process message: {e}")
-                    await self._consumer.commit()
+                        if not await self._handle_message(tp, msg):
+                            break                      # could not even record the failure: rewound, will be redelivered
+                    else:
+                        await self._consumer.commit()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"MemoryUpdateWorker polling loop error: {e}")
                 await asyncio.sleep(2.0)
+
+    async def _handle_message(self, tp, msg) -> bool:
+        """Processes one Kafka message. True = safe to commit past it (processed, or a retry/dead-letter record is
+        durable). False = nothing was recorded; the consumer was rewound to this message and must not commit."""
+        raw = msg.value
+        payload: Optional[dict] = None
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("payload is not a JSON object")
+            await self._process_turn(payload)
+            MEMORY_UPDATE_RESULTS.labels(outcome="ingested").inc()
+            return True
+        except Exception as exc:
+            logger.error(f"MemoryUpdateWorker failed to process message: {type(exc).__name__}: {exc}")
+            try:
+                self._schedule_retry_or_park(payload, raw, exc)
+                return True
+            except Exception as record_exc:
+                logger.error(f"MemoryUpdateWorker could not record the failure ({type(record_exc).__name__}); rewinding")
+                MEMORY_UPDATE_RESULTS.labels(outcome="rewound").inc()
+                try:
+                    self._consumer.seek(tp, msg.offset)
+                except Exception:
+                    pass
+                await asyncio.sleep(2.0)
+                return False
+
+    def _schedule_retry_or_park(self, payload: Optional[dict], raw: bytes, exc: Exception) -> None:
+        """Writes the retry job (or, past the attempt limit / for an undecodable payload, a FAILED dead-letter record)."""
+        if self.cassandra_repo is None:
+            raise RuntimeError("no retry store configured")
+        now = datetime.now(timezone.utc)
+        error = f"{type(exc).__name__}: {exc}"[:500]
+        decodable = isinstance(payload, dict) and bool(payload.get("conversation_id"))
+        attempt = int(payload.get("attempt_count", 0)) if decodable else MAX_INGEST_ATTEMPTS
+        # Never retry what cannot succeed: an undecodable/foreign payload goes straight to the dead-letter record.
+        if decodable and attempt + 1 < MAX_INGEST_ATTEMPTS and not isinstance(exc, (KeyError, ValueError)):
+            retry_payload = {**payload, "attempt_count": attempt + 1}
+            backoff = 2 ** (attempt + 1)
+            status, next_retry, outcome = "PENDING", now + timedelta(seconds=backoff), "retry_scheduled"
+            stored = json.dumps(retry_payload)
+        else:
+            status, next_retry, outcome = "FAILED", now, "dead_lettered"
+            stored = json.dumps(payload) if decodable else raw.decode("utf-8", errors="replace")[:20000]
+        self.cassandra_repo.insert_retry_job({
+            "status": status,
+            "next_retry": next_retry,
+            "job_id": uuid.uuid4(),
+            "job_type": JOB_TYPE,
+            "payload": stored,
+            "retry_count": attempt + 1 if status == "PENDING" else attempt,
+            "max_retry": MAX_INGEST_ATTEMPTS,
+            "last_error": error if status == "PENDING" else f"Dead-lettered: {error}",
+            "created_at": now,
+        })
+        MEMORY_UPDATE_RESULTS.labels(outcome=outcome).inc()
 
     async def _process_turn(self, payload: dict) -> None:
         conversation_id = payload["conversation_id"]

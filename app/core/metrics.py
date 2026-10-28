@@ -115,6 +115,11 @@ COMPACTION_RESULTS = Counter(
     "Outcome of one summary update",
     ["outcome"],     # committed | nothing_new | refined | consolidated | fallback_trimmed | failed | lost_race
 )
+MEMORY_UPDATE_RESULTS = Counter(
+    "memory_update_ingest_results_total",
+    "Outcome of ingesting one memory.update.requested event",
+    ["outcome"],     # ingested | retry_scheduled | dead_lettered | rewound
+)
 COMPACTION_SECONDS = Histogram(
     "memory_compaction_seconds",
     "Duration of one summary update (all model calls included)",

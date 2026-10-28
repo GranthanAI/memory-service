@@ -18,6 +18,9 @@ from app.repositories.memory_repository import MemoryRepository
 logger = logging.getLogger("memory_service.services.memory_service")
 
 
+TRANSITION_CAS_ATTEMPTS = 3
+
+
 class MemoryService:
     """
     Coordinates workflow execution states for user memory snapshots.
@@ -68,7 +71,30 @@ class MemoryService:
         Validates and transitions snapshot state, persisting the changes to Cassandra and Redis cache.
         If transitioning from a non-existent snapshot, initializes a new snapshot in ACTIVE state.
         """
-        snapshot = await self.get_or_hydrate_snapshot(conversation_id)
+        for attempt in range(1, TRANSITION_CAS_ATTEMPTS + 1):
+            snapshot = await self.get_or_hydrate_snapshot(conversation_id)
+            if snapshot is None:
+                break
+            current_state = MemoryState(snapshot["state"])
+            if not self.is_valid_transition(current_state, new_state):
+                raise ValueError(
+                    f"Invalid state transition for conversation {conversation_id}: "
+                    f"cannot move from {current_state} to {new_state}."
+                )
+            # Column-scoped compare-and-set: only state / snapshot_version change, and only if nobody else bumped
+            # snapshot_version since this read. Writing the whole row back would reset the message_count the
+            # dispatcher incremented meanwhile.
+            expected = int(snapshot["snapshot_version"])
+            state_value = new_state.value if hasattr(new_state, "value") else new_state
+            if await self.memory_repo.transition_snapshot_state(conversation_id, state_value, expected + 1, expected):
+                snapshot["state"] = new_state
+                snapshot["snapshot_version"] = expected + 1
+                snapshot["updated_at"] = datetime.now(timezone.utc)
+                logger.info(f"Transitioning snapshot {conversation_id} from {current_state} to {new_state}.")
+                return snapshot
+            logger.info(f"State transition for {conversation_id} lost a concurrent write (attempt {attempt}); re-reading.")
+        else:
+            raise RuntimeError(f"snapshot for '{conversation_id}' kept changing concurrently; state transition not applied")
 
         if snapshot is None:
             # Initialize a new snapshot structure
@@ -90,20 +116,8 @@ class MemoryService:
                 "updated_at": datetime.now(timezone.utc)
             }
             logger.info(f"Initializing new conversation snapshot {conversation_id} in ACTIVE state.")
-        else:
-            current_state = MemoryState(snapshot["state"])
-            if not self.is_valid_transition(current_state, new_state):
-                raise ValueError(
-                    f"Invalid state transition for conversation {conversation_id}: "
-                    f"cannot move from {current_state} to {new_state}."
-                )
 
-            snapshot["state"] = new_state
-            snapshot["snapshot_version"] += 1
-            snapshot["updated_at"] = datetime.now(timezone.utc)
-            logger.info(f"Transitioning snapshot {conversation_id} from {current_state} to {new_state}.")
-
-        # Persist mutations across both layers via unified MemoryRepository
+        # Persist the NEW snapshot across both layers via unified MemoryRepository
         await self.memory_repo.save_snapshot(snapshot)
         
         return snapshot
