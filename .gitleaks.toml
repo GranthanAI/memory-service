@@ -1,0 +1,11 @@
+# Secret scanning config (gitleaks). Used by the pre-commit hook and CI.
+title = "GranthanAI gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Obviously fake keys used as test fixtures (see tests for the secret-leak validator)."
+regexes = [
+  '''(nvapi-|AIza|gsk_|sk-|tvly-)FAKE[A-Za-z0-9_.-]*''',
+]
