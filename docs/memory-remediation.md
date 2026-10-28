@@ -60,7 +60,8 @@ Not verified yet (confirm before fixing in its phase): P0-4 and everything in Ph
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 0 | done (see baseline below) | repro tests added, no fixes |
-| 1-7 | not started | |
+| 1 | done (pending full-suite confirmation, see below) | P0-1 and P0-2 fixed; consumer changed before producer |
+| 2-7 | not started | |
 
 ## Phase 0 baseline (2026-10-28, all on `main`)
 
@@ -76,6 +77,27 @@ Repro tests (`tests/unit/test_memory_remediation_repro.py`, all fail without `xf
 - `test_valid_legacy_ancestor_summary_is_accepted` (P0-2, recall)
 - `test_legacy_ancestor_summary_past_the_branch_point_is_rejected` (P0-2, leak)
 - `test_summary_commit_does_not_reset_counters_bumped_during_the_llm_call` (P0-3)
+
+## Phase 1 notes (message identity and ordering)
+
+- **Event shape (additive):** `memory.update.requested` gains optional `user_message_id`, `assistant_message_id`,
+  `user_created_at`, `assistant_created_at`. llm-service fills them from `ctx.message_id`, `ctx.response_message_id`,
+  the user message's UUIDv7 time (else `ctx.started_at`) and the completion time. Old events (no fields) and new events
+  are both accepted.
+- **Ordering rule:** `message_key` is unchanged, `(created_at, message_id)`. The ingestion worker now guarantees the
+  assistant message is stamped strictly after the user message (>= 1 ms, Cassandra's precision): the given times if
+  they are ordered, else `user + 1 ms`. Legacy events keep their uuid5 ids and event ids (redelivery stays idempotent);
+  only the assistant `created_at` moves by 1 ms. Watermarks, `select_new_messages`, `_watermark`, history search and the
+  gRPC window all use `message_key`, so they need no change.
+- **Not fixed (existing rows):** turns already stored with equal timestamps keep their old, possibly scrambled order.
+  Rewriting them is out of scope (never rewrite stored rows); a redelivered legacy event after the upgrade would add a
+  second row for the assistant at the shifted time (same message id, different `created_at`).
+- **Branch validity (`summary_valid_at_branch`):** v7 vs v7 compares the millisecond timestamp (equal ms only if the ids
+  are identical, since order inside one ms is random); a legacy uuid5 watermark compares `through_created_at` with the
+  time in the branch id, strictly earlier only; anything else fails closed. Consequence: a legacy summary that covers the
+  very latest turn is not shown to a branch made at that turn (publish time is after the message time, so it is not
+  provable). New-format summaries do not have this limit.
+- **Rollout order:** deploy memory-service first, then llm-service.
 
 ## Proposal (out of scope): multilingual embedding model
 

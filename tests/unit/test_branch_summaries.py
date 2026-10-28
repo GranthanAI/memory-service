@@ -17,8 +17,9 @@ USER, OTHER = "user-1", "user-2"
 
 
 def mid(n: int) -> str:
-    """Time-ordered ids like UUIDv7: larger n = later."""
-    return str(uuid.UUID(int=(0x018F << 80) + n))
+    """A real UUIDv7 (what conversation-service mints): larger n = one second later."""
+    ms = 1_760_000_000_000 + n * 1000
+    return str(uuid.UUID(int=(ms << 80) | (0x7 << 76) | (0b10 << 62) | n))
 
 
 class Repo:

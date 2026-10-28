@@ -52,6 +52,13 @@ class TestCassandraAdapter:
             mock_settings.CASSANDRA_PORT = 9042
             mock_settings.CASSANDRA_KEYSPACE = "graphgpt_memory"
             mock_settings.CASSANDRA_TIMEOUT_SECONDS = 5.0
+            mock_settings.ENVIRONMENT = "development"
+            mock_settings.CASSANDRA_LOCAL_DC = "datacenter1"
+            mock_settings.CASSANDRA_REPLICATION_STRATEGY = "NetworkTopologyStrategy"
+            mock_settings.CASSANDRA_REPLICATION_FACTOR = None
+            mock_settings.CASSANDRA_CONSISTENCY_READ = "LOCAL_QUORUM"
+            mock_settings.CASSANDRA_CONSISTENCY_WRITE = "LOCAL_QUORUM"
+            mock_settings.CASSANDRA_SERIAL_CONSISTENCY = "LOCAL_SERIAL"
 
             cassandra_mod._cluster = None
             cassandra_mod._session = None

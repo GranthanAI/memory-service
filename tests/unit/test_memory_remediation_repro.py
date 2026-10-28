@@ -52,7 +52,6 @@ async def stored_order(turn_timestamps):
     return [r["role"] for r in rows]
 
 
-@pytest.mark.xfail(strict=True, reason="P0-1: equal created_at + uuid5 tie-break scrambles about half of the turns")
 async def test_legacy_event_turns_are_stored_user_then_assistant():
     roles = await stored_order([T0 + timedelta(seconds=10 * i) for i in range(200)])
     assert roles == ["user", "assistant"] * 200
@@ -81,7 +80,6 @@ def ancestor_case(through_ts, branch_ts, seed):
     return builder.ancestor_summaries("u1", [{"conversation_id": "A", "upto_message_id": uuid7_at(branch_ts, seed)}])
 
 
-@pytest.mark.xfail(strict=True, reason="P0-2: uuid5 through_message_id is compared numerically with a UUIDv7")
 async def test_valid_legacy_ancestor_summary_is_accepted():
     rng = random.Random(7)
     accepted = 0
@@ -92,7 +90,6 @@ async def test_valid_legacy_ancestor_summary_is_accepted():
     assert accepted == 200                            # today about 0.6% pass
 
 
-@pytest.mark.xfail(strict=True, reason="P0-2: the same random comparison also FALSELY accepts ~0.6% of leaking summaries")
 async def test_legacy_ancestor_summary_past_the_branch_point_is_rejected():
     """Safety half: a summary covering messages after the branch point must never be shown to the child."""
     rng = random.Random(8)

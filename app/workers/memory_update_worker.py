@@ -8,32 +8,75 @@ without it, EventDispatcher/SummaryWorker/FactWorker/EmbeddingWorker never
 receive any data to operate on, since nothing else in the system publishes to
 memory.summary.request / memory.fact.request / memory.embedding.request.
 
-The llm-service event carries one turn (user_message + assistant_response,
-no message_id, no event_id) rather than the canonical MemoryEventEnvelope
-shape EventDispatcher.dispatch() expects. This worker adapts by synthesizing
-one dispatch() call per side of the turn (user, then assistant), deriving
-stable message_id/event_id values via uuid5 so redelivery is naturally
-idempotent (EventDispatcher's own idempotency check on event_id still applies).
+The llm-service event carries one turn (user_message + assistant_response)
+rather than the canonical MemoryEventEnvelope shape EventDispatcher.dispatch()
+expects. This worker adapts by synthesizing one dispatch() call per side of the
+turn (user, then assistant), so redelivery is naturally idempotent
+(EventDispatcher's own idempotency check on event_id still applies).
+
+Message identity and order
+--------------------------
+Newer events carry optional `user_message_id`, `assistant_message_id`, `user_created_at` and `assistant_created_at`
+(the real conversation-service ids and times). When present they are used as is. Legacy events carry none of them:
+the ids stay uuid5-derived (so a redelivered legacy event is still idempotent) and the assistant message is stamped
+LEGACY_ASSISTANT_OFFSET after the user message. Messages are ordered by (created_at, message_id), so equal timestamps
+would let the random uuid5 decide the order of the two sides of a turn. In every case the assistant message is forced
+strictly after the user message of its turn.
 """
 
 import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiokafka import AIOKafkaConsumer
 
 from app.core.config import settings
 from app.events.dispatcher import EventDispatcher
+from app.services.summary_service import _as_utc
+from app.utils.message_ids import uuid7_datetime
 
 logger = logging.getLogger("memory_service.workers.memory_update_worker")
 
 _NAMESPACE = uuid.UUID("d6a1f9d2-8b3e-4b8a-9d5a-6f3b2e1c4a70")
 
 
+# Cassandra timestamps have millisecond precision: a smaller offset could collapse back to the same value when stored.
+LEGACY_ASSISTANT_OFFSET = timedelta(milliseconds=1)
+
+
 def _derive_id(*parts: str) -> str:
     return str(uuid.uuid5(_NAMESPACE, ":".join(parts)))
+
+
+def turn_identity(payload: dict) -> dict:
+    """(ids, timestamps) of the two messages of a turn. Accepts both the new event shape and the legacy one."""
+    conversation_id = payload["conversation_id"]
+    timestamp = payload.get("timestamp") or datetime.now(timezone.utc).isoformat()
+    base_key = f"{conversation_id}:{timestamp}"
+
+    user_mid = payload.get("user_message_id") or None
+    assistant_mid = payload.get("assistant_message_id") or None
+    event_ts = _as_utc(timestamp) or datetime.now(timezone.utc)
+
+    user_ts = _as_utc(payload.get("user_created_at")) or uuid7_datetime(user_mid) or event_ts
+    assistant_ts = _as_utc(payload.get("assistant_created_at")) or uuid7_datetime(assistant_mid)
+    if assistant_ts is None:
+        assistant_ts = max(event_ts, user_ts)
+    # The assistant answers the user: never at or before the user message, whatever the source of the times.
+    if assistant_ts <= user_ts:
+        assistant_ts = user_ts + LEGACY_ASSISTANT_OFFSET
+
+    return {
+        "user_event_id": _derive_id(base_key, "user"),
+        "assistant_event_id": _derive_id(base_key, "assistant"),
+        "user_message_id": str(user_mid) if user_mid else _derive_id(base_key, "user", "msg"),
+        "assistant_message_id": str(assistant_mid) if assistant_mid else _derive_id(base_key, "assistant", "msg"),
+        "user_created_at": user_ts.isoformat(),
+        "assistant_created_at": assistant_ts.isoformat(),
+        "timestamp": timestamp,
+    }
 
 
 class MemoryUpdateWorker:
@@ -94,34 +137,33 @@ class MemoryUpdateWorker:
     async def _process_turn(self, payload: dict) -> None:
         conversation_id = payload["conversation_id"]
         user_id = payload["user_id"]
-        timestamp = payload.get("timestamp") or datetime.now(timezone.utc).isoformat()
-
-        base_key = f"{conversation_id}:{timestamp}"
+        ident = turn_identity(payload)
+        timestamp = ident["timestamp"]
 
         user_envelope = {
-            "event_id": _derive_id(base_key, "user"),
+            "event_id": ident["user_event_id"],
             "event_type": "chat.message.created",
             "conversation_id": conversation_id,
             "user_id": user_id,
             "timestamp": timestamp,
             "payload": {
-                "message_id": _derive_id(base_key, "user", "msg"),
+                "message_id": ident["user_message_id"],
                 "role": "user",
                 "content": payload.get("user_message", ""),
-                "created_at": timestamp,
+                "created_at": ident["user_created_at"],
             },
         }
         assistant_envelope = {
-            "event_id": _derive_id(base_key, "assistant"),
+            "event_id": ident["assistant_event_id"],
             "event_type": "chat.response.completed",
             "conversation_id": conversation_id,
             "user_id": user_id,
             "timestamp": timestamp,
             "payload": {
-                "message_id": _derive_id(base_key, "assistant", "msg"),
+                "message_id": ident["assistant_message_id"],
                 "role": "assistant",
                 "content": payload.get("assistant_response", ""),
-                "created_at": timestamp,
+                "created_at": ident["assistant_created_at"],
             },
         }
 
