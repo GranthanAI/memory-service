@@ -56,6 +56,15 @@ class SystemSettings(BaseSettings):
     CASSANDRA_PORT: int = 9042
     CASSANDRA_KEYSPACE: str = "graphgpt_memory"
     CASSANDRA_TIMEOUT_SECONDS: float = 5.0
+    # Keyspace replication used when the service creates the keyspace. Production requires NetworkTopologyStrategy and
+    # RF >= 3. RF unset = 3 in production, 1 elsewhere. An EXISTING keyspace is never altered; see
+    # docs/cassandra_replication.md for the ALTER KEYSPACE + nodetool repair steps.
+    CASSANDRA_LOCAL_DC: str = "datacenter1"
+    CASSANDRA_REPLICATION_STRATEGY: str = "NetworkTopologyStrategy"
+    CASSANDRA_REPLICATION_FACTOR: int | None = None
+    CASSANDRA_CONSISTENCY_READ: str = "LOCAL_QUORUM"
+    CASSANDRA_CONSISTENCY_WRITE: str = "LOCAL_QUORUM"
+    CASSANDRA_SERIAL_CONSISTENCY: str = "LOCAL_SERIAL"  # for lightweight transactions (IF ...)
 
     # ─── Redis (Hot Cache Only) ───────────────────────────────────────────────
     # Redis stores nothing that cannot be rebuilt from Cassandra.
@@ -185,6 +194,18 @@ class SystemSettings(BaseSettings):
             raise ValueError("CONTEXT_MIN_VERBATIM_MESSAGES must be >= 1 and CONTEXT_MAX_UNSUMMARIZED_MESSAGES >= SHORT_TERM_MESSAGE_LIMIT")
         if not 0.0 < self.HISTORY_SEARCH_RECALL_MIN_COVERAGE <= self.HISTORY_SEARCH_MIN_COVERAGE <= 1.0:
             raise ValueError("HISTORY_SEARCH coverage thresholds must satisfy 0 < recall <= default <= 1")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cassandra_config(self):
+        from app.db.keyspace import validate_cassandra_settings
+        problems = validate_cassandra_settings(
+            self.ENVIRONMENT, self.CASSANDRA_REPLICATION_STRATEGY, self.CASSANDRA_REPLICATION_FACTOR,
+            self.CASSANDRA_KEYSPACE, self.CASSANDRA_LOCAL_DC, self.CASSANDRA_CONSISTENCY_READ,
+            self.CASSANDRA_CONSISTENCY_WRITE, self.CASSANDRA_SERIAL_CONSISTENCY,
+        )
+        if problems:
+            raise ValueError("Invalid Cassandra configuration: " + "; ".join(problems))
         return self
 
     @model_validator(mode="after")

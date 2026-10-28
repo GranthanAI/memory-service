@@ -230,8 +230,11 @@ settings = SystemSettings()
 > **Design Note:** Cassandra Logged Batches used in this service guarantee atomic mutation delivery (all mutations are applied or retried). They do **NOT** provide ACID transaction isolation. All write paths are designed to be idempotent to compensate for Cassandra's lack of rollback support.
 
 ```sql
+-- Production: NetworkTopologyStrategy with RF >= 3 (enforced at startup; set CASSANDRA_LOCAL_DC to your datacenter).
+-- Single-node development / staging: RF=1 (CASSANDRA_REPLICATION_FACTOR, or unset outside production).
+-- See docs/cassandra_replication.md for configuration and for migrating existing clusters.
 CREATE KEYSPACE IF NOT EXISTS graphgpt_memory
-WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}
+WITH replication = {'class': 'NetworkTopologyStrategy', '<datacenter>': 3}
 AND durable_writes = true;
 
 USE graphgpt_memory;

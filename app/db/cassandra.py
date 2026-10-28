@@ -27,13 +27,56 @@ Tables Created (matching LLD §3):
 import logging
 from typing import List, Optional
 
-from cassandra.cluster import Cluster, Session
+from cassandra import ConsistencyLevel
+from cassandra.cluster import Cluster, Session, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import DCAwareRoundRobinPolicy, RetryPolicy
-from cassandra.query import SimpleStatement
+from cassandra.query import SimpleStatement, Statement
 
 from app.core.config import settings
+from app.db.keyspace import effective_replication_factor, is_read_query, keyspace_cql
 
 logger = logging.getLogger("memory_service.db.cassandra")
+
+
+class ConsistencySession:
+    """Thin proxy over a driver Session that applies CASSANDRA_CONSISTENCY_READ to SELECTs.
+
+    Everything else (writes, batches, LWTs) uses the cluster's default execution profile, which carries
+    CASSANDRA_CONSISTENCY_WRITE and CASSANDRA_SERIAL_CONSISTENCY. All other attributes are delegated unchanged."""
+
+    def __init__(self, session: Session, read_cl: int):
+        self._session = session
+        self._read_cl = read_cl
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def _query_text(self, query) -> str:
+        if isinstance(query, str):
+            return query
+        text = getattr(query, "query_string", None)
+        if text is None and getattr(query, "prepared_statement", None) is not None:
+            text = query.prepared_statement.query_string
+        return text or ""
+
+    def _apply(self, query):
+        if isinstance(query, str):
+            return SimpleStatement(query, consistency_level=self._read_cl) if is_read_query(query) else query
+        if isinstance(query, Statement) and query.consistency_level is None and is_read_query(self._query_text(query)):
+            query.consistency_level = self._read_cl
+        return query
+
+    def prepare(self, query, *args, **kwargs):
+        prepared = self._session.prepare(query, *args, **kwargs)
+        if is_read_query(self._query_text(prepared)):
+            prepared.consistency_level = self._read_cl
+        return prepared
+
+    def execute(self, query, *args, **kwargs):
+        return self._session.execute(self._apply(query), *args, **kwargs)
+
+    def execute_async(self, query, *args, **kwargs):
+        return self._session.execute_async(self._apply(query), *args, **kwargs)
 
 # Global references — initialized once during startup
 _cluster: Optional[Cluster] = None
@@ -41,12 +84,6 @@ _session: Optional[Session] = None
 
 
 # ─── CQL DDL Statements ───────────────────────────────────────────────────────
-
-_CREATE_KEYSPACE = """
-CREATE KEYSPACE IF NOT EXISTS {keyspace}
-WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}
-AND durable_writes = true;
-"""
 
 _DDL_STATEMENTS = [
     # Table 1: Lightweight Conversation Snapshots
@@ -221,11 +258,16 @@ def connect_cassandra() -> None:
     ]
     logger.info(f"Connecting to Cassandra at {contact_points}:{settings.CASSANDRA_PORT}")
 
+    profile = ExecutionProfile(
+        load_balancing_policy=DCAwareRoundRobinPolicy(local_dc=settings.CASSANDRA_LOCAL_DC),
+        retry_policy=RetryPolicy(),
+        consistency_level=ConsistencyLevel.name_to_value[settings.CASSANDRA_CONSISTENCY_WRITE],
+        serial_consistency_level=ConsistencyLevel.name_to_value[settings.CASSANDRA_SERIAL_CONSISTENCY],
+    )
     _cluster = Cluster(
         contact_points=contact_points,
         port=settings.CASSANDRA_PORT,
-        load_balancing_policy=DCAwareRoundRobinPolicy(),
-        default_retry_policy=RetryPolicy(),
+        execution_profiles={EXEC_PROFILE_DEFAULT: profile},
         connect_timeout=settings.CASSANDRA_TIMEOUT_SECONDS,
         protocol_version=4,
     )
@@ -236,14 +278,22 @@ def connect_cassandra() -> None:
         logger.info(f"Creating keyspace '{settings.CASSANDRA_KEYSPACE}' if not exists...")
         system_session.execute(
             SimpleStatement(
-                _CREATE_KEYSPACE.format(keyspace=settings.CASSANDRA_KEYSPACE)
+                keyspace_cql(
+                    settings.CASSANDRA_KEYSPACE,
+                    settings.CASSANDRA_REPLICATION_STRATEGY,
+                    settings.CASSANDRA_LOCAL_DC,
+                    effective_replication_factor(settings.CASSANDRA_REPLICATION_FACTOR, settings.ENVIRONMENT),
+                )
             )
         )
     finally:
         system_session.shutdown()
 
     # Bind session to the keyspace
-    _session = _cluster.connect(settings.CASSANDRA_KEYSPACE)
+    _session = ConsistencySession(
+        _cluster.connect(settings.CASSANDRA_KEYSPACE),
+        ConsistencyLevel.name_to_value[settings.CASSANDRA_CONSISTENCY_READ],
+    )
     logger.info(f"Cassandra session bound to keyspace '{settings.CASSANDRA_KEYSPACE}'.")
 
     from app.db.migrations import MigrationManager
