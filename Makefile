@@ -18,7 +18,7 @@ sync:
 
 # Run the FastAPI service locally on the host machine
 run:
-	uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$${FORWARDED_ALLOW_IPS:-127.0.0.1}"
 
 # Start shared GraphGPT docker infrastructure containers
 infra:

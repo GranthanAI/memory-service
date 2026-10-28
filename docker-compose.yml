@@ -8,9 +8,14 @@ services:
       - .:/workspace
     working_dir: /workspace
     # Install dependencies and start the app without building a custom image
-    command: sh -c "pip install --no-cache-dir -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "pip install --no-cache-dir -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips ${FORWARDED_ALLOW_IPS:-127.0.0.1}"
     environment:
-      - APP_ENV=production
+      # The config reads ENVIRONMENT (not APP_ENV); "production" enables the fail-fast secret checks, so these
+      # secrets must be provided in the shell / compose .env (>= 32 chars, not a dev default).
+      - ENVIRONMENT=production
+      - API_KEY=${API_KEY:?set API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?set JWT_SECRET_KEY}
+      - USER_JWT_SECRET_KEY=${USER_JWT_SECRET_KEY:?set USER_JWT_SECRET_KEY}
       - REDIS_URL=redis://host.docker.internal:6379/0
       - MILVUS_HOST=host.docker.internal
       - MILVUS_PORT=19530
