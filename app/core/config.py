@@ -172,7 +172,7 @@ class SystemSettings(BaseSettings):
     # Question-aware retrieval of older ORIGINAL messages of the same conversation (lexical, no new index).
     # ON: llm-service renders `retrieved_history` ("Earlier Messages From This Conversation"). Deploy llm-service first
     # (an older llm-service ignores the field, so the extra work would be wasted, not harmful).
-    HISTORY_SEARCH_ENABLED: bool = False
+    HISTORY_SEARCH_ENABLED: bool = True
     HISTORY_SEARCH_MAX_MESSAGES: int = 400
     HISTORY_SEARCH_TOP_K: int = 3
     HISTORY_SEARCH_MIN_COVERAGE: float = 0.5            # share of the question's distinctive terms a hit must contain

@@ -18,6 +18,43 @@ from app.core.logging import clear_log_context, set_log_context
 from app.proto import memory_pb2, memory_pb2_grpc
 from app.services.context_builder import ContextBuilder
 from app.services.summary_service import message_key
+from app.utils.token_counter import TokenCounter
+
+_COUNTER = TokenCounter()
+MESSAGE_OVERHEAD_TOKENS = 4
+
+
+def fit_context_to_budget(result: dict, max_tokens: int) -> int:
+    """Applies the caller's token budget to an assembled context and returns the REAL token total.
+
+    `max_tokens` <= 0 means "no budget": nothing is dropped. Otherwise the summary, ancestor summaries and facts are kept
+    (they are the compact layers) and the verbatim parts give way, least valuable first: retrieved older messages (last
+    ranked first), then the oldest recent messages. The newest message is always kept."""
+    def tokens(text) -> int:
+        return _COUNTER.count(str(text or "")) + MESSAGE_OVERHEAD_TOKENS
+
+    def total() -> int:
+        return (
+            (tokens(result.get("current_summary")) if result.get("current_summary") else 0)
+            + sum(tokens(a.get("summary")) for a in result.get("ancestor_summaries", []))
+            + sum(tokens(f.get("statement") or f.get("content")) for f in result.get("relevant_facts", []))
+            + sum(tokens(m.get("content")) for m in result.get("retrieved_history", []))
+            + sum(tokens(m.get("content")) for m in result.get("short_term_messages", []))
+        )
+
+    used = total()
+    if max_tokens and max_tokens > 0 and used > max_tokens:
+        retrieved = list(result.get("retrieved_history", []))
+        while retrieved and used > max_tokens:
+            used -= tokens(retrieved.pop().get("content"))
+        result["retrieved_history"] = retrieved
+        recent = list(result.get("short_term_messages", []))
+        while len(recent) > 1 and used > max_tokens:
+            used -= tokens(recent.pop(0).get("content"))          # oldest first; the newest message stays
+        result["short_term_messages"] = recent
+        used = total()
+        result.setdefault("metadata", {})["budget_trimmed"] = True
+    return used
 
 logger = logging.getLogger("memory_service.proto.memory_handlers")
 
@@ -113,13 +150,15 @@ class MemoryContextHandler(memory_pb2_grpc.MemoryServiceServicer):
                 query_text=request.query or None,
             )
 
+            total_tokens = fit_context_to_budget(result, int(request.max_tokens or 0))
+
             return memory_pb2.GetMemoryContextResponse(
                 short_term_messages=_messages_to_proto(result.get("short_term_messages", [])),
                 retrieved_history=_messages_to_proto(result.get("retrieved_history", [])),
                 medium_summary=result.get("current_summary") or "",
                 long_term_facts=_facts_to_proto(result.get("relevant_facts", [])),
                 semantic_snippets=[],
-                total_tokens=0,
+                total_tokens=total_tokens,
                 request_id=trace_id,
                 summary_version=int((result.get("summary_meta") or {}).get("summary_version") or 0),
                 summary_through_message_id=str((result.get("summary_meta") or {}).get("through_message_id") or ""),
