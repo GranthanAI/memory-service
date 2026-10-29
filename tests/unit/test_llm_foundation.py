@@ -20,14 +20,19 @@ from app.factories.llm_factory import LLMFactory
 from app.managers.llm_manager import LLMManager
 
 
-def test_system_settings_llm_loading():
-    """Asserts that all new LLM configurations load with expected defaults."""
-    assert settings.LLM_PROVIDER == "groq"
-    assert settings.LLM_MODEL == "llama-3.3-70b-versatile"
-    assert settings.LLM_TIMEOUT_SECONDS == 60.0
-    assert settings.LLM_MAX_RETRIES == 3
-    assert settings.LLM_TEMPERATURE == 0.2
-    assert settings.LLM_MAX_TOKENS == 1024
+def test_system_settings_llm_loading(monkeypatch):
+    """Asserts that all LLM configurations load with their code defaults. Built without .env or LLM_* environment variables:
+    the checked values are the DEFAULTS, not whatever the developer's local .env selects (it may choose another provider)."""
+    for name in ("LLM_PROVIDER", "LLM_MODEL", "LLM_TIMEOUT_SECONDS", "LLM_MAX_RETRIES", "LLM_TEMPERATURE", "LLM_MAX_TOKENS"):
+        monkeypatch.delenv(name, raising=False)
+    from app.core.config import SystemSettings
+    defaults = SystemSettings(_env_file=None)
+    assert defaults.LLM_PROVIDER == "groq"
+    assert defaults.LLM_MODEL == "openai/gpt-oss-20b"
+    assert defaults.LLM_TIMEOUT_SECONDS == 60.0
+    assert defaults.LLM_MAX_RETRIES == 3
+    assert defaults.LLM_TEMPERATURE == 0.2
+    assert defaults.LLM_MAX_TOKENS == 1024
 
 
 @pytest.mark.asyncio
@@ -66,6 +71,7 @@ def test_llm_factory_selection():
 @pytest.mark.asyncio
 async def test_llm_manager_singleton():
     """Asserts LLMManager enforces singleton constraints."""
+    LLMManager._instance = None          # earlier tests (and the app container) may have created the singleton already
     provider_a = MockLLMProvider()
     provider_b = MockLLMProvider()
     

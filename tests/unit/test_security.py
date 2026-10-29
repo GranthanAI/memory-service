@@ -11,6 +11,7 @@ Verifies:
   - FastAPI verify_service_auth dependency verification.
 """
 
+from app.core.config import settings
 import time
 import pytest
 from fastapi import HTTPException
@@ -78,8 +79,9 @@ def test_verify_jwt_expired():
 @pytest.mark.asyncio
 async def test_verify_service_auth_api_key():
     """Verify that verify_service_auth permits valid API keys."""
-    # API key matching settings.API_KEY
-    res = await verify_service_auth(api_key="graphgpt-memory-secret")
+    # API key matching settings.API_KEY (whatever the environment configures; bearer=None because called outside FastAPI,
+    # where the default would be a Security marker object, not a missing credential)
+    res = await verify_service_auth(api_key=settings.API_KEY, bearer=None)
     assert res["method"] == "api_key"
     assert res["identity"] == "internal_service"
 

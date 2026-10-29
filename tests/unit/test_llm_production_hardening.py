@@ -78,7 +78,10 @@ def test_http_request_tracing_middleware():
     Verifies that the FastAPI trace ID middleware extracts/generates X-Trace-ID response headers
     and populates log tracing contexts.
     """
-    with TestClient(app) as client:
+    # No `with`: entering the TestClient would run the app lifespan (real Cassandra/Redis/Milvus/Kafka bootstrap). The trace-id
+    # middleware does not need it.
+    client = TestClient(app)
+    if True:
         # 1. Test request passing custom Trace ID
         trace_id = "test-custom-trace-uuid-1234"
         response = client.get("/health", headers={"X-Trace-ID": trace_id})

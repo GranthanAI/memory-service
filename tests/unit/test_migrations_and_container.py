@@ -104,6 +104,15 @@ def test_migration_manager_run_migrations_subset_pending():
     assert upgrades_called == [2]
 
 
+ALL_COLUMNS = [
+    "conversation_id", "state", "message_count", "snapshot_metadata",
+    "summary_text", "summary_version", "through_message_id", "through_created_at", "prompt_version", "llm_provider",
+    "event_id", "processed_at", "job_id", "status", "topic", "payload", "claimed_date", "claimed_at",
+    "next_retry", "user_id", "category", "fact_id", "statement", "importance",
+    "content", "message_id", "created_at", "memory_enabled", "statement_hash", "anchor_id", "kind", "anchor_text",
+]
+
+
 def test_validate_schema_success():
     """validate_schema passes if all expected tables and columns are present."""
     session = MagicMock()
@@ -118,19 +127,17 @@ def test_validate_schema_success():
         "outbox_processing_index",
         "retry_jobs",
         "user_facts",
-        "conversation_recent_messages"
+        "conversation_recent_messages",
+        "user_memory_settings",
+        "user_fact_tombstones",
+        "conversation_summary_versions",
+        "conversation_anchors",
     ]
     
     keyspace_tables = {}
     for t_name in tables:
         t_mock = MagicMock()
-        t_mock.columns = [
-            "conversation_id", "state", "message_count", "snapshot_metadata",
-            "summary_text", "summary_version", "event_id", "processed_at",
-            "job_id", "status", "topic", "payload", "claimed_date", "claimed_at",
-            "next_retry", "user_id", "category", "fact_id", "statement", "importance", 
-            "content", "message_id", "created_at"
-        ]
+        t_mock.columns = list(ALL_COLUMNS)
         keyspace_tables[t_name] = t_mock
         
     keyspace.tables = keyspace_tables
@@ -139,6 +146,28 @@ def test_validate_schema_success():
     manager = MigrationManager(session)
     # Should not raise any error
     manager.validate_schema()
+
+
+def test_validate_schema_requires_the_columns_added_by_later_migrations():
+    """The summary watermark, summary metadata and the new tables (migrations 5-9) are part of the validated schema."""
+    def keyspace_without(table, column):
+        keyspace = MagicMock()
+        keyspace.tables = {}
+        for name in ("conversation_snapshots", "conversation_summaries", "processed_events", "outbox_jobs",
+                     "outbox_processing_index", "retry_jobs", "user_facts", "conversation_recent_messages",
+                     "user_memory_settings", "user_fact_tombstones", "conversation_summary_versions", "conversation_anchors"):
+            t = MagicMock()
+            t.columns = [c for c in ALL_COLUMNS if not (name == table and c == column)]
+            keyspace.tables[name] = t
+        session = MagicMock()
+        session.cluster.metadata.keyspaces = {"graphgpt_memory": keyspace}
+        return MigrationManager(session)
+
+    for table, column in (("conversation_summaries", "prompt_version"), ("conversation_summaries", "llm_provider"),
+                          ("conversation_summaries", "through_message_id"), ("conversation_anchors", "anchor_text"),
+                          ("conversation_summary_versions", "summary_text")):
+        with pytest.raises(RuntimeError, match=column):
+            keyspace_without(table, column).validate_schema()
 
 
 def test_validate_schema_missing_table():

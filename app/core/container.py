@@ -114,7 +114,7 @@ class Container:
         # Pluggable Embedding Client
         client_type = settings.EMBEDDING_CLIENT_TYPE.lower().strip()
         if client_type == "mock":
-            self.embedding_client = MockEmbeddingClient()
+            self.embedding_client = MockEmbeddingClient(dimension=settings.VECTOR_DIMENSION)   # must match the Milvus collection
         else:
             self.embedding_client = GRPCEmbeddingClient(
                 target=f"{settings.LLM_SERVICE_HOST}:{settings.LLM_SERVICE_PORT}",

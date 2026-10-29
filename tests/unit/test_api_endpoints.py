@@ -11,6 +11,7 @@ Tests:
 """
 
 import pytest
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,6 +24,16 @@ from app.api.dependencies import (
     get_llm_service,
     get_context_builder,
 )
+
+
+# ─── Test client ──────────────────────────────────────────────────────────────
+
+@contextmanager
+def api_client():
+    """A TestClient WITHOUT running the app lifespan. Entering `with TestClient(app)` runs startup, which connects to real
+    Cassandra / Redis / Milvus / Kafka and starts every background worker: slow (about a minute per test), dependent on live
+    infrastructure, and not what these dependency-override tests are about."""
+    yield TestClient(app, raise_server_exceptions=False)
 
 
 # ─── Mock Factories ───────────────────────────────────────────────────────────
@@ -51,8 +62,10 @@ def make_mock_redis_client(ping_ok: bool = True, fail: bool = False):
 
 def make_mock_llm_service(healthy: bool = True):
     service = MagicMock()
-    service.manager = MagicMock()
-    service.manager.check_health = AsyncMock(return_value=healthy)
+    # LLMService exposes its manager as `llm_manager` (the readiness probe awaits llm_service.llm_manager.check_health()).
+    service.llm_manager = MagicMock()
+    service.llm_manager.check_health = AsyncMock(return_value=healthy)
+    service.manager = service.llm_manager                       # old name, kept for tests that still use it
     return service
 
 
@@ -97,7 +110,7 @@ def clear_overrides():
 
 class TestLivenessProbe:
     def test_health_returns_200(self):
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with api_client() as client:
             response = client.get("/health")
         assert response.status_code == 200
         assert response.json() == {"status": "healthy"}
@@ -114,7 +127,7 @@ class TestReadinessProbe:
     def test_ready_all_healthy(self):
         override_all_healthy()
         with patch("app.api.internal.health.check_milvus_ready", return_value=True):
-            with TestClient(app, raise_server_exceptions=False) as client:
+            with api_client() as client:
                 response = client.get("/internal/health/ready")
         assert response.status_code == 200
         body = response.json()
@@ -129,7 +142,7 @@ class TestReadinessProbe:
         app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client()
         app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service()
         with patch("app.api.internal.health.check_milvus_ready", return_value=True):
-            with TestClient(app, raise_server_exceptions=False) as client:
+            with api_client() as client:
                 response = client.get("/internal/health/ready")
         assert response.status_code == 503
         body = response.json()
@@ -142,7 +155,7 @@ class TestReadinessProbe:
         app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client(fail=True)
         app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service()
         with patch("app.api.internal.health.check_milvus_ready", return_value=True):
-            with TestClient(app, raise_server_exceptions=False) as client:
+            with api_client() as client:
                 response = client.get("/internal/health/ready")
         assert response.status_code == 503
         body = response.json()
@@ -152,7 +165,7 @@ class TestReadinessProbe:
     def test_ready_milvus_fails(self):
         override_all_healthy()
         with patch("app.api.internal.health.check_milvus_ready", return_value=False):
-            with TestClient(app, raise_server_exceptions=False) as client:
+            with api_client() as client:
                 response = client.get("/internal/health/ready")
         assert response.status_code == 503
         body = response.json()
@@ -164,7 +177,7 @@ class TestReadinessProbe:
         app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client()
         app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service(healthy=False)
         with patch("app.api.internal.health.check_milvus_ready", return_value=True):
-            with TestClient(app, raise_server_exceptions=False) as client:
+            with api_client() as client:
                 response = client.get("/internal/health/ready")
         assert response.status_code == 503
         body = response.json()
@@ -176,7 +189,7 @@ class TestReadinessProbe:
         app.dependency_overrides[get_redis_health_client] = lambda: make_mock_redis_client(fail=True)
         app.dependency_overrides[get_llm_service] = lambda: make_mock_llm_service(healthy=False)
         with patch("app.api.internal.health.check_milvus_ready", return_value=False):
-            with TestClient(app, raise_server_exceptions=False) as client:
+            with api_client() as client:
                 response = client.get("/internal/health/ready")
         assert response.status_code == 503
         assert response.json()["status"] == "not_ready"
@@ -195,7 +208,7 @@ class TestMemoryContextEndpoint:
     def test_context_success(self):
         mock_builder = make_mock_context_builder()
         app.dependency_overrides[get_context_builder] = lambda: mock_builder
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with api_client() as client:
             response = client.post(
                 "/internal/memory/context",
                 json={
@@ -221,7 +234,7 @@ class TestMemoryContextEndpoint:
         
         mock_builder = make_mock_context_builder()
         app.dependency_overrides[get_context_builder] = lambda: mock_builder
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with api_client() as client:
             response = client.post(
                 "/internal/memory/context",
                 json={
@@ -240,7 +253,7 @@ class TestMemoryContextEndpoint:
         
         mock_builder = make_mock_context_builder()
         app.dependency_overrides[get_context_builder] = lambda: mock_builder
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with api_client() as client:
             response = client.post(
                 "/internal/memory/context",
                 headers={"X-API-Key": "graphgpt-memory-secret"},
@@ -261,7 +274,7 @@ class TestMemoryContextEndpoint:
         token = generate_jwt({"sub": "test-service"}, secret_key="graphgpt-jwt-secret")
         mock_builder = make_mock_context_builder()
         app.dependency_overrides[get_context_builder] = lambda: mock_builder
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with api_client() as client:
             response = client.post(
                 "/internal/memory/context",
                 headers={"Authorization": f"Bearer {token}"},
@@ -275,7 +288,9 @@ class TestMemoryContextEndpoint:
         assert response.status_code == 200
 
     def test_context_missing_required_fields(self):
-        with TestClient(app, raise_server_exceptions=False) as client:
+        # the builder dependency needs the app container (created by the lifespan, which these tests do not run): override it
+        app.dependency_overrides[get_context_builder] = lambda: make_mock_context_builder()
+        with api_client() as client:
             response = client.post(
                 "/internal/memory/context",
                 json={"conversation_id": "conv-test-001"},  # missing user_id and query
@@ -285,7 +300,7 @@ class TestMemoryContextEndpoint:
     def test_context_builder_error_returns_500(self):
         mock_builder = make_mock_context_builder(fail=True)
         app.dependency_overrides[get_context_builder] = lambda: mock_builder
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with api_client() as client:
             response = client.post(
                 "/internal/memory/context",
                 json={
@@ -300,7 +315,8 @@ class TestMemoryContextEndpoint:
 
     def test_context_top_k_facts_bounds(self):
         """top_k_facts must be between 1 and 50."""
-        with TestClient(app, raise_server_exceptions=False) as client:
+        app.dependency_overrides[get_context_builder] = lambda: make_mock_context_builder()
+        with api_client() as client:
             response = client.post(
                 "/internal/memory/context",
                 json={
@@ -325,7 +341,7 @@ class TestMemoryContextEndpoint:
         }
         mock_builder = make_mock_context_builder(payload=payload)
         app.dependency_overrides[get_context_builder] = lambda: mock_builder
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with api_client() as client:
             response = client.post(
                 "/internal/memory/context",
                 json={
@@ -346,7 +362,7 @@ class TestMemoryContextEndpoint:
 
 class TestMetricsEndpoint:
     def test_metrics_returns_prometheus_format(self):
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with api_client() as client:
             response = client.get("/metrics")
         assert response.status_code == 200
         # Prometheus text format starts with # HELP or a metric name

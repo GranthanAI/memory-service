@@ -26,6 +26,10 @@ def make_mock_container():
     container.redis_client = AsyncMock()
     container.redis_client.ping.return_value = True
     
+    # Internal LLM manager: instance attributes set in Container.__init__ are not part of spec=Container, so the mock
+    # must define it (None = the optional LLM health check is skipped, which is what these Cassandra/Redis/Milvus tests want).
+    container.llm_manager = None
+
     # LLM pool mock
     container.llm_pool = AsyncMock()
     mock_channel = MagicMock()

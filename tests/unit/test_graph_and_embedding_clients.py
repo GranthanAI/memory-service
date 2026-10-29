@@ -19,6 +19,15 @@ from app.core.container import Container
 
 # ─── Graph Client Tests ──────────────────────────────────────────────────────
 
+def failing_response():
+    """A 500 response that behaves like httpx's: raise_for_status() raises HTTPStatusError. A bare MagicMock does not raise,
+    and the client's retry / circuit-breaker logic keys off that exception."""
+    resp = MagicMock()
+    resp.status_code = 500
+    resp.raise_for_status.side_effect = httpx.HTTPStatusError("server error", request=MagicMock(), response=resp)
+    return resp
+
+
 @pytest.mark.asyncio
 async def test_graph_client_connection_pool_lifecycle():
     """GraphClient initializes and tears down its httpx AsyncClient connection pool cleanly."""
@@ -40,9 +49,8 @@ async def test_graph_client_transient_retry_success():
     await client.connect()
     
     # Mock request_with_retry to trigger mock call sequence: 500 error -> 500 error -> 200 success
-    mock_resp_fail = MagicMock()
-    mock_resp_fail.status_code = 500
-    
+    mock_resp_fail = failing_response()
+
     mock_resp_ok = MagicMock()
     mock_resp_ok.status_code = 200
     mock_resp_ok.json.return_value = [{"conversation_id": "conv-1", "summary": "ancestor summary"}]
@@ -68,9 +76,8 @@ async def test_graph_client_circuit_breaker_trips():
     client = GraphClient()
     await client.connect()
     
-    mock_resp = MagicMock()
-    mock_resp.status_code = 500
-    
+    mock_resp = failing_response()
+
     with patch.object(client.client, "request", return_value=mock_resp), \
          patch("asyncio.sleep"):
         
@@ -165,6 +172,20 @@ async def test_grpc_embedding_client_circuit_breaker():
 
 # ─── Container Pluggability Tests ───────────────────────────────────────────
 
+def infrastructure_stubs() -> dict:
+    """These tests are about WHICH embedding client the container wires. init_resources() also starts a gRPC server, a Kafka
+    producer and every background worker (Kafka consumers); with a mocked `settings` those cannot start (the gRPC port is a
+    MagicMock), so they are replaced by stubs with awaitable start()/stop()."""
+    def stub_class():
+        instance = MagicMock()
+        instance.start, instance.stop = AsyncMock(), AsyncMock()
+        return MagicMock(return_value=instance)
+
+    names = ("GRPCServer", "KafkaProducer", "MemoryUpdateWorker", "OutboxDaemonWorker", "SummaryWorker",
+             "BranchSummaryWorker", "IdleCompactionWorker", "ConversationDeleteWorker", "FactWorker", "EmbeddingWorker")
+    return {name: stub_class() for name in names}
+
+
 @pytest.mark.asyncio
 async def test_container_wires_mock_embedding_client():
     """Container instantiates MockEmbeddingClient when settings.EMBEDDING_CLIENT_TYPE is 'mock'."""
@@ -173,7 +194,8 @@ async def test_container_wires_mock_embedding_client():
     with patch("app.core.container.get_session"), \
          patch("app.core.container.get_redis_client"), \
          patch("app.core.container.MilvusRepository"), \
-         patch("app.core.container.AsyncGRPCConnectionPool") as mock_grpc_pool, \
+         patch("app.clients.embedding_client.AsyncGRPCConnectionPool") as mock_grpc_pool, \
+         patch.multiple("app.core.container", **infrastructure_stubs()), \
          patch("app.core.container.settings") as mock_settings:
          
         mock_settings.EMBEDDING_CLIENT_TYPE = "mock"
@@ -204,7 +226,8 @@ async def test_container_wires_grpc_embedding_client():
     with patch("app.core.container.get_session"), \
          patch("app.core.container.get_redis_client"), \
          patch("app.core.container.MilvusRepository"), \
-         patch("app.core.container.AsyncGRPCConnectionPool") as mock_grpc_pool, \
+         patch("app.clients.embedding_client.AsyncGRPCConnectionPool") as mock_grpc_pool, \
+         patch.multiple("app.core.container", **infrastructure_stubs()), \
          patch("app.core.container.settings") as mock_settings:
          
         mock_settings.EMBEDDING_CLIENT_TYPE = "grpc"
