@@ -172,7 +172,11 @@ class CassandraRepository:
             WHERE user_id = ? AND category = ? AND fact_id = ?
         """)
         self._touch_fact = self.session.prepare("""
-            UPDATE user_facts SET last_confirmed = ?
+            UPDATE user_facts SET last_confirmed = ?, conversation_id = ?
+            WHERE user_id = ? AND category = ? AND fact_id = ?
+        """)
+        self._mark_fact_used = self.session.prepare("""
+            UPDATE user_facts SET last_used = ?
             WHERE user_id = ? AND category = ? AND fact_id = ?
         """)
         self._delete_fact = self.session.prepare("""
@@ -399,9 +403,17 @@ class CassandraRepository:
         now = datetime.now(timezone.utc)
         self.session.execute(self._retire_fact, (superseded_by, now, now, user_id, category, fact_id))
 
-    def touch_fact_confirmed(self, user_id: str, category: str, fact_id: uuid.UUID) -> None:
-        """The user said this again: recency now counts from here."""
-        self.session.execute(self._touch_fact, (datetime.now(timezone.utc), user_id, category, fact_id))
+    def touch_fact_confirmed(self, user_id: str, category: str, fact_id: uuid.UUID, conversation_id: Optional[str] = None) -> None:
+        """The user said this again (in `conversation_id`): recency counts from here, and the fact's source becomes that
+        conversation, so deleting the conversation it was first learned in does not take a fact the user has since restated."""
+        if conversation_id is None:
+            existing = self.get_fact(user_id, category, fact_id) or {}
+            conversation_id = existing.get("conversation_id")
+        self.session.execute(self._touch_fact, (datetime.now(timezone.utc), conversation_id, user_id, category, fact_id))
+
+    def mark_fact_used(self, user_id: str, category: str, fact_id: uuid.UUID) -> None:
+        """The fact was injected into an answer."""
+        self.session.execute(self._mark_fact_used, (datetime.now(timezone.utc), user_id, category, fact_id))
 
     def upsert_fact(self, fact: Dict[str, Any]) -> None:
         """Saves a structured long-term fact."""

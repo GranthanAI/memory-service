@@ -5,7 +5,9 @@ Retrieval Service handles cache read-through and DB fallback lookups,
 combining snapshots, recent messages, summaries, and Milvus semantic search.
 """
 
+import asyncio
 import logging
+from datetime import datetime, timezone
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -142,6 +144,43 @@ class RetrievalService:
             out.append(dict(hit, last_confirmed=row.get("last_confirmed"), last_used=row.get("last_used")))
         return out
 
+    _background: set = set()          # strong references so fire-and-forget tasks are not garbage collected mid-flight
+
+    def _schedule_last_used(self, user_id: str, facts: List[Dict[str, Any]]) -> None:
+        """Stamps `last_used` on the facts that were just chosen for an answer. Best effort and OFF the request path: a
+        background task runs the (blocking) Cassandra writes in a worker thread, so the answer never waits for them and a failure
+        only costs a stale timestamp. A fact used recently is skipped, which also bounds the write rate."""
+        cassandra = getattr(self.memory_repo, "cassandra_repo", None)
+        if not settings.FACT_LAST_USED_ENABLED or cassandra is None or not hasattr(cassandra, "mark_fact_used") or not facts:
+            return
+        now = datetime.now(timezone.utc)
+        due = []
+        for fact in facts:
+            last = fact.get("last_used")
+            if isinstance(last, datetime) and (now - (last if last.tzinfo else last.replace(tzinfo=timezone.utc))
+                                               ).total_seconds() < settings.FACT_LAST_USED_MIN_INTERVAL_SECONDS:
+                continue
+            try:
+                due.append((fact["category"], uuid.UUID(str(fact["fact_id"]))))
+            except (KeyError, ValueError):
+                continue
+        if not due:
+            return
+
+        def write() -> None:
+            for category, fact_id in due:
+                try:
+                    cassandra.mark_fact_used(user_id, category, fact_id)
+                except Exception as exc:
+                    logger.debug(f"Could not stamp last_used ({type(exc).__name__}).")
+
+        try:
+            task = asyncio.get_running_loop().create_task(asyncio.to_thread(write))
+        except RuntimeError:                                           # no running loop (sync caller): skip, it is only a hint
+            return
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
     @staticmethod
     def _within_budget(ranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Keeps the best-ranked facts that fit the character budget for injected memory."""
@@ -195,7 +234,9 @@ class RetrievalService:
 
             # 2. Score and rank using RankingService
             ranked = RankingService.rank_facts(hits, limit=limit)
-            return self._within_budget(ranked)
+            chosen = self._within_budget(ranked)
+            self._schedule_last_used(user_id, chosen)
+            return chosen
         except Exception as e:
             logger.error(f"Error retrieving relevant facts for user {user_id}: {e}")
             return []

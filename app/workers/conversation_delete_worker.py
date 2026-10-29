@@ -3,11 +3,16 @@ app/workers/conversation_delete_worker.py
 
 Consumes `conversation.deleted` (published by conversation-service when a conversation is deleted) and removes what
 memory-service holds for it: the durable message window, the summary and all archived summary versions, the snapshot and
-every cache key. Facts learned from the conversation are the USER's memory, not the conversation's, so they are kept unless
-DELETE_FACTS_WITH_CONVERSATION is true (the user can delete them in the memory controls).
+every cache key. With DELETE_FACTS_WITH_CONVERSATION (default on) the facts whose SOURCE conversation is the deleted one are
+retired as well (kept as history, vector removed, never retrieved again). A fact that was corroborated in another conversation
+already points at that newer conversation (the corroboration rewrites the source), so it stays.
 
-Consequence worth knowing: a branch made from the deleted conversation loses the inherited SUMMARY of it (it still receives the
-parent's raw history from conversation-service). Idempotent: running twice is harmless.
+A branch made from the deleted conversation loses the inherited SUMMARY of it (it still receives the parent's raw history from
+conversation-service, which stops lineage at a deleted ancestor). Idempotent: running twice is harmless.
+
+A delete that fails is never dropped: it is recorded in retry_jobs (job type "conversation_delete"; RetryScheduler republishes the
+original event to the delete retry topic, which this worker also consumes), becomes a FAILED dead-letter record after the attempt
+limit, and if even that record cannot be written the offset is not committed and the consumer rewinds. A lost delete is a privacy bug.
 """
 import asyncio
 import json
@@ -21,8 +26,11 @@ from app.core.config import settings
 from app.core.metrics import CONVERSATION_DELETE_RESULTS
 from app.events.topics import CONVERSATION_DELETED
 from app.services import memory_policy
+from app.workers.retry_support import schedule_retry_or_park
 
 logger = logging.getLogger("memory_service.workers.conversation_delete_worker")
+
+JOB_TYPE = "conversation_delete"
 
 
 class ConversationDeleteWorker:
@@ -59,26 +67,59 @@ class ConversationDeleteWorker:
                 logger.warning("could not clear compaction counters (%s)", type(exc).__name__)
         if settings.DELETE_FACTS_WITH_CONVERSATION and user_id:
             for category in memory_policy.CATEGORIES:
-                for fact in self.cassandra_repo.get_facts(user_id, category, include_inactive=True):
+                for fact in self.cassandra_repo.get_facts(user_id, category):          # active facts only
                     if fact.get("conversation_id") == conversation_id:
-                        self.cassandra_repo.delete_fact(user_id, category, fact["fact_id"])
+                        # Retire (history kept, superseded_by none), Cassandra first; then drop the vector so it is never retrieved.
+                        self.cassandra_repo.retire_fact(user_id, category, fact["fact_id"], None)
                         self.milvus_repo.delete_fact(user_id, str(fact["fact_id"]))
         return "purged"
 
-    async def handle(self, raw: bytes) -> str:
-        try:
-            envelope = json.loads(raw.decode("utf-8"))
-            payload = envelope.get("payload", envelope) if isinstance(envelope, dict) else {}
-            outcome = await self.purge(payload)
-        except Exception as exc:
-            logger.error("conversation purge failed (%s: %s)", type(exc).__name__, exc)
-            outcome = "error"
+    async def process(self, raw: bytes) -> str:
+        """Handles one event; raises on failure (the caller records it for retry)."""
+        envelope = json.loads(raw.decode("utf-8"))
+        payload = envelope.get("payload", envelope) if isinstance(envelope, dict) else {}
+        outcome = await self.purge(payload)
         CONVERSATION_DELETE_RESULTS.labels(outcome=outcome).inc()
         return outcome
 
+    async def handle(self, raw: bytes) -> str:
+        """process() for callers that only want an outcome label ("error" instead of an exception)."""
+        try:
+            return await self.process(raw)
+        except Exception as exc:
+            logger.error("conversation purge failed (%s: %s)", type(exc).__name__, exc)
+            CONVERSATION_DELETE_RESULTS.labels(outcome="error").inc()
+            return "error"
+
+    async def handle_with_retry(self, tp, msg) -> bool:
+        """True = safe to commit past `msg`. False = the failure could not even be recorded; the consumer was rewound."""
+        try:
+            await self.process(msg.value)
+            return True
+        except Exception as exc:
+            logger.error("conversation purge failed (%s: %s); recording for retry", type(exc).__name__, exc)
+            try:
+                payload = json.loads(msg.value.decode("utf-8"))
+            except Exception:
+                payload = None
+            try:
+                outcome = schedule_retry_or_park(self.cassandra_repo, JOB_TYPE, payload, msg.value, exc)
+                CONVERSATION_DELETE_RESULTS.labels(outcome=outcome).inc()
+                return True
+            except Exception as record_exc:
+                logger.error("could not record the failed purge (%s); rewinding", type(record_exc).__name__)
+                CONVERSATION_DELETE_RESULTS.labels(outcome="rewound").inc()
+                try:
+                    self._consumer.seek(tp, msg.offset)
+                except Exception:
+                    pass
+                await asyncio.sleep(2.0)
+                return False
+
     async def start(self) -> None:
         self._consumer = AIOKafkaConsumer(
-            CONVERSATION_DELETED, bootstrap_servers=self.bootstrap_servers, group_id=self.group_id,
+            CONVERSATION_DELETED, settings.KAFKA_CONVERSATION_DELETE_RETRY_TOPIC,
+            bootstrap_servers=self.bootstrap_servers, group_id=self.group_id,
             enable_auto_commit=False, session_timeout_ms=settings.KAFKA_SESSION_TIMEOUT_MS,
             max_poll_interval_ms=settings.KAFKA_MAX_POLL_INTERVAL_MS)
         await self._consumer.start()
@@ -93,10 +134,7 @@ class ConversationDeleteWorker:
                     continue
                 for tp, messages in batch.items():
                     for msg in messages:
-                        if await self.handle(msg.value) == "error":
-                            # a purge that failed is retried: rewind to it and do not commit past it
-                            self._consumer.seek(tp, msg.offset)
-                            await asyncio.sleep(2.0)
+                        if not await self.handle_with_retry(tp, msg):
                             break
                     else:
                         await self._consumer.commit()

@@ -106,13 +106,16 @@ Repro tests (`tests/unit/test_memory_remediation_repro.py`, all fail without `xf
 
 ## Phase 2-7 notes
 
-**Deploy order:** memory-service first (it accepts old and new event shapes), then llm-service, then conversation-service.
+**Deploy order: memory-service -> llm-service -> conversation-service.** memory-service accepts old and new event shapes, and an OLD
+llm-service simply ignores the new response fields (`retrieved_history`, `anchors`). The reverse pairing also works: a NEW llm-service
+against an OLD memory-service receives those fields empty and builds the prompt without the new sections (tested in
+llm-service `tests/unit/test_old_memory_service_compat.py`).
 Cassandra migrations 6-9 run at memory-service startup (additive, re-runnable). The proto change (`Anchor`, `anchors = 11`) is additive.
 
 **New configuration (all in `app/core/config.py`; defaults in brackets):**
 `LLM_MODEL_VERSION` [""], `ANCESTOR_VERSION_LOOKBACK` [50], `ANCESTOR_BRIDGE_MAX_TOKENS` [1500], `CORE_PROFILE_ENABLED` [true],
 `RETRIEVAL_INCLUDE_PREVIOUS_TURN` [true], `EXPLICIT_MEMORY_FAST_PATH` [true], `IDLE_COMPACTION_ENABLED` [true],
-`IDLE_COMPACTION_MINUTES` [30], `DELETE_FACTS_WITH_CONVERSATION` [false], `ANCHOR_LEDGER_ENABLED` [true],
+`IDLE_COMPACTION_MINUTES` [30], `DELETE_FACTS_WITH_CONVERSATION` [true], `ANCHOR_LEDGER_ENABLED` [true],
 `ANCHOR_LLM_EXTRACTION` [true], `ANCHOR_RENDER_MAX_CHARS` [3000], `SUMMARY_VALIDATION_RETRIES` [1], `HISTORY_SEARCH_ENABLED` [true].
 llm-service: `PROMPT_HISTORY_AS_MESSAGES` [**false**: changes every prompt's shape; enable after a canary],
 `PROMPT_RETRIEVED_HISTORY_ENABLED` [true].
@@ -123,8 +126,10 @@ whole-row upsert), `test_long_memory_service` / `test_memory_quality` (facts are
 `test_event_history` in conversation-service (history entries carry `message_id`).
 
 **Decisions taken without asking (change them if you disagree):**
-1. Deleting a conversation purges its messages, summaries, summary versions, snapshot and caches but KEEPS the facts learned from it
-   (`DELETE_FACTS_WITH_CONVERSATION=false`). A branch made from a deleted conversation loses the inherited *summary* of it.
+1. Deleting a conversation purges its messages, summaries, summary versions, snapshot and caches, and RETIRES the facts whose source
+   conversation it was (`DELETE_FACTS_WITH_CONVERSATION=true`; retired = kept as history, vector removed, never retrieved). A fact the user
+   restated in another conversation moves its source to that conversation (`touch_fact_confirmed`), so it survives. A branch made from a
+   deleted conversation loses the inherited *summary* of it (conversation-service already stops lineage at a deleted ancestor).
 2. Role-separated history ships dark (flag off).
 3. Cassandra cannot make one conditional batch across two tables, so a superseded summary is archived first (idempotent), then replaced.
 
@@ -132,10 +137,10 @@ whole-row upsert), `test_long_memory_service` / `test_memory_quality` (facts are
 - Turns stored before Phase 1 with equal timestamps keep their old order; a legacy summary through the latest turn is not shown to a branch
   made at that turn (not provable); a regenerated answer only replaces the raw message (summaries are not edited retroactively) and only when
   the event carries real ids.
-- `last_used` is stored but not yet written on retrieval (recency uses `last_confirmed`).
+- `last_used` is stamped in a background task when facts are retrieved (at most once per `FACT_LAST_USED_MIN_INTERVAL_SECONDS`, best effort); ranking recency uses the later of `last_confirmed` / `last_used`.
 - The anchor ledger is not added to *inherited* (ancestor) summaries; a child sees the ancestor summary version + bridge only.
 - The entity check is deterministic (identifiers, numbers, versions, paths, URLs): it does not catch an invented *name* in prose.
-- Branch-creation and conversation-delete consumers are best effort / at-least-once without a DLQ of their own.
+- The branch-creation and conversation-delete consumers record failures in `retry_jobs` (retry with backoff, then a FAILED dead-letter row; an unrecordable failure is not committed past). Retries go to dedicated topics (`memory.branch_summary.retry`, `memory.conversation_delete.retry`), which must exist.
 - `evaluation.run --real` (paid model) is a stub that refuses to run; the harness is offline-only.
 
 ## Phase 7: evaluation harness

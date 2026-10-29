@@ -58,8 +58,9 @@ class Cassandra:
         self.facts[(u, c, f)]["status"] = "SUPERSEDED"
         self.facts[(u, c, f)]["superseded_by"] = superseded_by
 
-    def touch_fact_confirmed(self, u, c, f):
-        pass
+    def touch_fact_confirmed(self, u, c, f, conversation_id=None):
+        if conversation_id and (u, c, f) in self.facts:
+            self.facts[(u, c, f)]["conversation_id"] = conversation_id
 
     def get_fact(self, u, c, f):
         return self.facts.get((u, c, f))

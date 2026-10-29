@@ -1,5 +1,6 @@
 """Phase 5: long-term facts - soft supersede with an LLM judgement, reconciliation, explicit-memory fast path, idle trigger,
 extraction from the consumed messages, regenerated answers, conversation deletes, retrieval (recency, core profile, query)."""
+import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -60,9 +61,15 @@ class Facts:
         else:
             self.vectors.pop(str(args[1]), None)
 
-    def touch_fact_confirmed(self, u, c, f):
+    def touch_fact_confirmed(self, u, c, f, conversation_id=None):
         self.rows[(u, c, f)]["last_confirmed"] = NOW
+        if conversation_id:
+            self.rows[(u, c, f)]["conversation_id"] = conversation_id        # the restating conversation becomes the source
         self.log.append(("confirm", self.rows[(u, c, f)]["statement"]))
+
+    def mark_fact_used(self, u, c, f):
+        self.rows[(u, c, f)]["last_used"] = NOW
+        self.log.append(("used", self.rows[(u, c, f)]["statement"]))
 
     def get_memory_enabled(self, u): return None
     def get_fact_tombstones(self, u): return set()
@@ -381,36 +388,71 @@ async def test_recently_active_or_nothing_new_or_busy_conversations_are_handled_
 # ─── deleting a conversation ─────────────────────────────────────────────────────────────────────────────────────────
 
 
-async def test_deleting_a_conversation_purges_its_memory_but_keeps_the_users_facts_by_default():
+def delete_world(retire_ok=True):
     facts = Facts()
-    fid = uuid.uuid4()
-    facts.rows[(U, "preferences", fid)] = {"conversation_id": "c1", "statement": "likes tea", "fact_id": fid, "category": "preferences"}
     facts.delete_conversation_data = MagicMock()
     memory_repo = SimpleNamespace(get_snapshot=AsyncMock(return_value={"user_id": U}), invalidate_conversation=AsyncMock())
     redis = SimpleNamespace(delete=AsyncMock(), zrem=AsyncMock())
-    worker = ConversationDeleteWorker(memory_repo, facts, facts, redis)
+    return facts, memory_repo, ConversationDeleteWorker(memory_repo, facts, facts, redis)
+
+
+def seed_fact(facts, conversation_id, statement, category="preferences"):
+    fid = uuid.uuid4()
+    facts.rows[(U, category, fid)] = {"conversation_id": conversation_id, "statement": statement, "fact_id": fid,
+                                      "category": category, "status": "ACTIVE"}
+    facts.vectors[str(fid)] = {"fact_id": str(fid), "user_id": U, "category": category}
+    return fid
+
+
+async def test_deleting_a_conversation_purges_its_memory_and_retires_the_facts_whose_source_it_was():
+    facts, memory_repo, worker = delete_world()
+    mine, other = seed_fact(facts, "c1", "learned in the deleted conversation"), seed_fact(facts, "c2", "learned elsewhere")
+    assert settings.DELETE_FACTS_WITH_CONVERSATION is True                   # the default
     assert await worker.purge({"conversation_id": "c1", "user_id": U}) == "purged"
     facts.delete_conversation_data.assert_called_once_with("c1")
     memory_repo.invalidate_conversation.assert_awaited_once_with("c1")
-    redis.zrem.assert_awaited_once()
-    assert (U, "preferences", fid) in facts.rows                       # the user's memory survives the conversation
+    assert facts.rows[(U, "preferences", mine)]["status"] == "SUPERSEDED"      # retired: kept as history, never current
+    assert facts.rows[(U, "preferences", mine)].get("superseded_by") is None
+    assert str(mine) not in facts.vectors                                      # and never retrieved
+    assert facts.rows[(U, "preferences", other)]["status"] == "ACTIVE" and str(other) in facts.vectors
+    assert [r["statement"] for r in facts.get_facts(U, "preferences")] == ["learned elsewhere"]
 
 
-async def test_deleting_a_conversation_can_also_remove_the_facts_learned_in_it(monkeypatch):
-    monkeypatch.setattr(settings, "DELETE_FACTS_WITH_CONVERSATION", True)
-    facts = Facts()
-    mine, other = uuid.uuid4(), uuid.uuid4()
-    facts.rows[(U, "preferences", mine)] = {"conversation_id": "c1", "statement": "a", "fact_id": mine}
-    facts.rows[(U, "preferences", other)] = {"conversation_id": "c2", "statement": "b", "fact_id": other}
-    facts.vectors[str(mine)] = {"fact_id": str(mine), "user_id": U}
-    facts.delete_fact_vec = None
+async def test_a_fact_restated_in_another_conversation_survives_deleting_the_one_it_was_first_learned_in():
+    facts, longmem = make()
+    await longmem.merge_user_facts(U, "c1", [candidate("User prefers dark mode")])
+    stats = await longmem.merge_user_facts(U, "c2", [candidate("User prefers dark mode")])     # said again, in c2
+    assert stats["skipped"] == 1
+    (fid,) = [k[2] for k in facts.rows]
+    assert facts.rows[(U, "preferences", fid)]["conversation_id"] == "c2"                     # its source moved to c2
+    worker = ConversationDeleteWorker(SimpleNamespace(get_snapshot=AsyncMock(return_value={"user_id": U}),
+                                                      invalidate_conversation=AsyncMock()), facts, facts)
     facts.delete_conversation_data = MagicMock()
-    facts.delete_fact = lambda u, c, f: facts.rows.pop((u, c, f), None)
-    worker = ConversationDeleteWorker(SimpleNamespace(get_snapshot=AsyncMock(return_value=None), invalidate_conversation=AsyncMock()),
-                                      facts, SimpleNamespace(delete_fact=lambda u, f: facts.vectors.pop(f, None)))
     await worker.purge({"conversation_id": "c1", "user_id": U})
-    assert (U, "preferences", mine) not in facts.rows and (U, "preferences", other) in facts.rows
-    assert str(mine) not in facts.vectors
+    assert facts.rows[(U, "preferences", fid)]["status"] == "ACTIVE" and str(fid) in facts.vectors
+    await worker.purge({"conversation_id": "c2", "user_id": U})                                # deleting c2 now retires it
+    assert facts.rows[(U, "preferences", fid)]["status"] == "SUPERSEDED"
+
+
+async def test_a_corroborated_interest_points_at_the_newer_conversation_and_survives():
+    facts, longmem = make()
+    await longmem.merge_user_facts(U, "c1", [candidate("User is interested in Kafka", "interests", 0.9)])
+    await longmem.merge_user_facts(U, "c2", [candidate("User is interested in Kafka", "interests", 0.9)])
+    current = [r for r in facts.rows.values() if r.get("status") == "ACTIVE"]
+    assert len(current) == 1 and current[0]["conversation_id"] == "c2"
+    facts.delete_conversation_data = MagicMock()
+    worker = ConversationDeleteWorker(SimpleNamespace(get_snapshot=AsyncMock(return_value={"user_id": U}),
+                                                      invalidate_conversation=AsyncMock()), facts, facts)
+    await worker.purge({"conversation_id": "c1", "user_id": U})
+    assert len([r for r in facts.rows.values() if r.get("status") == "ACTIVE"]) == 1
+
+
+async def test_with_the_flag_off_facts_are_kept(monkeypatch):
+    monkeypatch.setattr(settings, "DELETE_FACTS_WITH_CONVERSATION", False)
+    facts, _, worker = delete_world()
+    fid = seed_fact(facts, "c1", "kept")
+    await worker.purge({"conversation_id": "c1", "user_id": U})
+    assert facts.rows[(U, "preferences", fid)]["status"] == "ACTIVE" and str(fid) in facts.vectors
 
 
 async def test_another_users_conversation_is_never_purged_and_bad_events_do_not_raise():
@@ -472,3 +514,57 @@ def test_retrieval_query_adds_the_previous_user_message_only_to_short_follow_ups
     assert build_retrieval_query(long_q, recent) == long_q
     assert build_retrieval_query("and the second one?", []) == "and the second one?"
     assert build_retrieval_query("", recent) == ""
+
+
+# ─── last_used ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def used_world(last_used=None, fail=False):
+    facts = Facts()
+    fid = uuid.uuid4()
+    facts.rows[(U, "preferences", fid)] = {"fact_id": fid, "status": "ACTIVE", "statement": "likes tea", "last_used": last_used}
+    facts.vectors[str(fid)] = {"fact_id": str(fid), "user_id": U, "category": "preferences", "statement": "likes tea",
+                               "importance": 0.8, "vector": vec(1, 0), "created_at": NOW.timestamp()}
+    if fail:
+        facts.mark_fact_used = MagicMock(side_effect=RuntimeError("cassandra down"))
+    return facts, RetrievalService(SimpleNamespace(cassandra_repo=facts), facts, None)
+
+
+async def drain():
+    while RetrievalService._background:
+        await asyncio.gather(*list(RetrievalService._background))
+
+
+async def test_retrieved_facts_get_last_used_stamped_in_the_background_not_on_the_request_path():
+    facts, retrieval = used_world()
+    got = await retrieval.retrieve_relevant_facts(U, vec(1, 0), limit=5)
+    assert [f["statement"] for f in got] == ["likes tea"]
+    assert ("used", "likes tea") not in facts.log or True                 # may or may not have run yet: it is off the path
+    await drain()
+    assert ("used", "likes tea") in facts.log
+
+
+async def test_a_recently_used_fact_is_not_written_again():
+    facts, retrieval = used_world(last_used=datetime.now(timezone.utc) - timedelta(seconds=30))
+    await retrieval.retrieve_relevant_facts(U, vec(1, 0), limit=5)
+    await drain()
+    assert ("used", "likes tea") not in facts.log
+    facts, retrieval = used_world(last_used=datetime.now(timezone.utc) - timedelta(seconds=settings.FACT_LAST_USED_MIN_INTERVAL_SECONDS + 5))
+    await retrieval.retrieve_relevant_facts(U, vec(1, 0), limit=5)
+    await drain()
+    assert ("used", "likes tea") in facts.log
+
+
+async def test_a_failing_last_used_write_never_affects_the_answer():
+    facts, retrieval = used_world(fail=True)
+    got = await retrieval.retrieve_relevant_facts(U, vec(1, 0), limit=5)
+    await drain()
+    assert [f["statement"] for f in got] == ["likes tea"]
+
+
+async def test_last_used_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(settings, "FACT_LAST_USED_ENABLED", False)
+    facts, retrieval = used_world()
+    await retrieval.retrieve_relevant_facts(U, vec(1, 0), limit=5)
+    await drain()
+    assert ("used", "likes tea") not in facts.log

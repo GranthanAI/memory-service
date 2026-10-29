@@ -176,8 +176,9 @@ class SystemSettings(BaseSettings):
     CONTEXT_MAX_UNSUMMARIZED_MESSAGES: int = 120
     CONTEXT_STALE_MESSAGES: int = 40                    # uncovered messages beyond this = the summary is stale
     # Question-aware retrieval of older ORIGINAL messages of the same conversation (lexical, no new index).
-    # ON: llm-service renders `retrieved_history` ("Earlier Messages From This Conversation"). Deploy llm-service first
-    # (an older llm-service ignores the field, so the extra work would be wasted, not harmful).
+    # ON: llm-service renders `retrieved_history` ("Earlier Messages From This Conversation"). Deploy order is memory-service ->
+    # llm-service -> conversation-service: an older llm-service simply ignores the field (the search work is wasted, not harmful),
+    # and a newer llm-service talking to an older memory-service receives it empty.
     HISTORY_SEARCH_ENABLED: bool = True
     # Inherited (ancestor) summaries: how many archived versions are searched for one valid at the branch point, and the
     # raw-message "bridge" that closes the gap between that version and the branch point.
@@ -186,6 +187,10 @@ class SystemSettings(BaseSettings):
     ANCESTOR_BRIDGE_FETCH_LIMIT: int = 400
     # Core profile tier: who the user is (identity / role, category "personal") is offered with every request, within a
     # small budget, next to the stable preferences. Off = only question-matched facts and stable preferences.
+    # Facts injected into an answer get `last_used` stamped (best effort, in the background; a fact used within this many seconds is
+    # not written again, which bounds the write rate).
+    FACT_LAST_USED_ENABLED: bool = True
+    FACT_LAST_USED_MIN_INTERVAL_SECONDS: int = 3600
     CORE_PROFILE_ENABLED: bool = True
     CORE_PROFILE_MAX_FACTS: int = 2
     CORE_PROFILE_MIN_IMPORTANCE: float = 0.7
@@ -199,10 +204,13 @@ class SystemSettings(BaseSettings):
     IDLE_COMPACTION_ENABLED: bool = True
     IDLE_COMPACTION_MINUTES: int = 30
     IDLE_COMPACTION_POLL_SECONDS: int = 60
-    # What a deleted conversation takes with it. Messages, summaries (and versions) and cache keys always go. Facts learned
-    # from it stay unless this is true (they are the user's memory, not the conversation's); the user can delete them in the
-    # memory UI.
-    DELETE_FACTS_WITH_CONVERSATION: bool = False
+    # What a deleted conversation takes with it. Messages, summaries (and versions) and cache keys always go. With this on
+    # (default) the facts whose SOURCE conversation is the deleted one are retired too (kept as history, never retrieved). A fact
+    # that was corroborated in another conversation already points at that newer conversation, so it stays.
+    DELETE_FACTS_WITH_CONVERSATION: bool = True
+    # Retry topics for events a consumer failed to handle (RetryScheduler republishes the original event here after a backoff).
+    KAFKA_BRANCH_SUMMARY_RETRY_TOPIC: str = "memory.branch_summary.retry"
+    KAFKA_CONVERSATION_DELETE_RETRY_TOPIC: str = "memory.conversation_delete.retry"
     HISTORY_SEARCH_MAX_MESSAGES: int = 400
     HISTORY_SEARCH_TOP_K: int = 3
     HISTORY_SEARCH_MIN_COVERAGE: float = 0.5            # share of the question's distinctive terms a hit must contain

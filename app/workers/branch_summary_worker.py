@@ -11,8 +11,9 @@ branch_message_id) and makes sure the parent has a summary that a child can inhe
     from a newer summary; counted in `memory_branch_summary_total{outcome="unavailable"}`. The child still gets the
     parent's raw messages from conversation-service, and the context builder bridges from the best older version.
 
-Best effort by design: a failure here never blocks anything (the request-time path degrades to an older version + raw
-messages), so errors are logged and the offset is committed.
+A failure is never dropped silently: it is recorded in retry_jobs (job type "branch_summary"; RetryScheduler republishes the
+original event to the branch-summary retry topic, which this worker also consumes) and becomes a FAILED dead-letter record after
+the attempt limit. If even that record cannot be written the offset is not committed and the consumer rewinds.
 """
 import asyncio
 import json
@@ -28,8 +29,11 @@ from app.core.metrics import BRANCH_SUMMARY_RESULTS
 from app.events.topics import CONVERSATION_CREATED
 from app.services.branch_validity import summary_valid_at_branch
 from app.services.context_builder import ContextBuilder
+from app.workers.retry_support import schedule_retry_or_park
 
 logger = logging.getLogger("memory_service.workers.branch_summary_worker")
+
+JOB_TYPE = "branch_summary"
 
 
 class BranchSummaryWorker:
@@ -75,20 +79,51 @@ class BranchSummaryWorker:
             "attempt_count": 0})
         return "requested"
 
-    async def handle(self, raw: bytes) -> str:
-        try:
-            envelope = json.loads(raw.decode("utf-8"))
-            payload = envelope.get("payload", envelope) if isinstance(envelope, dict) else {}
-            outcome = await self.ensure_branch_summary(payload)
-        except Exception as exc:                                    # best effort: see the module docstring
-            logger.warning("branch summary check failed (%s: %s)", type(exc).__name__, exc)
-            outcome = "error"
+    async def process(self, raw: bytes) -> str:
+        """Handles one event; raises on failure (the caller records it for retry)."""
+        envelope = json.loads(raw.decode("utf-8"))
+        payload = envelope.get("payload", envelope) if isinstance(envelope, dict) else {}
+        outcome = await self.ensure_branch_summary(payload)
         BRANCH_SUMMARY_RESULTS.labels(outcome=outcome).inc()
         return outcome
 
+    async def handle(self, raw: bytes) -> str:
+        """process() for callers that only want an outcome label ("error" instead of an exception)."""
+        try:
+            return await self.process(raw)
+        except Exception as exc:
+            logger.warning("branch summary check failed (%s: %s)", type(exc).__name__, exc)
+            BRANCH_SUMMARY_RESULTS.labels(outcome="error").inc()
+            return "error"
+
+    async def handle_with_retry(self, tp, msg) -> bool:
+        """True = safe to commit past `msg` (handled, or a retry / dead-letter record is durable). False = nothing was
+        recorded; the consumer was rewound to `msg`."""
+        try:
+            await self.process(msg.value)
+            return True
+        except Exception as exc:
+            logger.warning("branch summary check failed (%s: %s); recording for retry", type(exc).__name__, exc)
+            try:
+                payload = json.loads(msg.value.decode("utf-8"))
+            except Exception:
+                payload = None
+            try:
+                outcome = schedule_retry_or_park(self.cassandra_repo, JOB_TYPE, payload, msg.value, exc)
+                BRANCH_SUMMARY_RESULTS.labels(outcome=outcome).inc()
+                return True
+            except Exception as record_exc:
+                logger.error("could not record the failure (%s); rewinding", type(record_exc).__name__)
+                try:
+                    self._consumer.seek(tp, msg.offset)
+                except Exception:
+                    pass
+                await asyncio.sleep(2.0)
+                return False
+
     async def start(self) -> None:
         self._consumer = AIOKafkaConsumer(
-            CONVERSATION_CREATED,
+            CONVERSATION_CREATED, settings.KAFKA_BRANCH_SUMMARY_RETRY_TOPIC,
             bootstrap_servers=self.bootstrap_servers,
             group_id=self.group_id,
             enable_auto_commit=False,
@@ -106,10 +141,12 @@ class BranchSummaryWorker:
                 batch = await self._consumer.getmany(timeout_ms=1000)
                 if not batch:
                     continue
-                for _tp, messages in batch.items():
+                for tp, messages in batch.items():
                     for msg in messages:
-                        await self.handle(msg.value)
-                await self._consumer.commit()
+                        if not await self.handle_with_retry(tp, msg):
+                            break
+                    else:
+                        await self._consumer.commit()
             except asyncio.CancelledError:
                 break
             except Exception as exc:

@@ -85,10 +85,11 @@ class LongMemoryService:
             logger.warning(f"Could not delete the vector of retired fact {fact_id_str} ({type(exc).__name__}); "
                            "reconcile_user_facts will remove it.")
 
-    def _confirm(self, user_id: str, same: Dict[str, Any]) -> None:
-        """The user said it again: refresh its recency (best effort)."""
+    def _confirm(self, user_id: str, same: Dict[str, Any], conversation_id: Optional[str] = None) -> None:
+        """The user said it again (in `conversation_id`): refresh its recency and make that conversation its source (best effort)."""
         try:
-            self.cassandra_repo.touch_fact_confirmed(user_id, same["category"], uuid.UUID(str(same["fact_id"])))
+            self.cassandra_repo.touch_fact_confirmed(
+                user_id, same["category"], uuid.UUID(str(same["fact_id"])), conversation_id)
         except Exception as exc:
             logger.debug(f"Could not refresh last_confirmed ({type(exc).__name__}).")
 
@@ -180,7 +181,7 @@ class LongMemoryService:
                     self._corroborate(user_id, conversation_id, same, importance, vector, existing, key)
                     stats["superseded"] += 1
                 else:
-                    self._confirm(user_id, same)
+                    self._confirm(user_id, same, conversation_id)
                     stats["skipped"] += 1
                 continue
 
@@ -221,7 +222,8 @@ class LongMemoryService:
                 stats["superseded"] += 1
             else:
                 logger.info(f"Ignoring lower-importance duplicate of '{target['statement']}'.")
-                self._confirm(user_id, {"category": target.get("category") or category, "fact_id": target["fact_id"]})
+                self._confirm(user_id, {"category": target.get("category") or category, "fact_id": target["fact_id"]},
+                              conversation_id)
                 stats["ignored"] += 1
 
         return stats

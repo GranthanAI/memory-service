@@ -58,6 +58,8 @@ class RetryScheduler:
             "embedding": settings.KAFKA_EMBEDDING_TOPIC,
             "delete": settings.KAFKA_DELETE_TOPIC,
             "memory_update": settings.KAFKA_MEMORY_UPDATE_TOPIC,
+            "branch_summary": settings.KAFKA_BRANCH_SUMMARY_RETRY_TOPIC,
+            "conversation_delete": settings.KAFKA_CONVERSATION_DELETE_RETRY_TOPIC,
         }
 
         for job in jobs:

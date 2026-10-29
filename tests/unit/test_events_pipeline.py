@@ -4,6 +4,7 @@ tests/unit/test_events_pipeline.py
 Unit tests for Phase 18 Kafka Consumer, Event Dispatcher, and Retry Scheduler.
 """
 
+import asyncio
 import json
 import uuid
 import pytest
@@ -160,7 +161,17 @@ async def test_consumer_manual_commits():
         # Mock poll return batch
         tp = MagicMock(topic="chat.message.created", partition=0)
         msg = MagicMock(value=json.dumps({"event_id": "1"}).encode("utf-8"))
-        mock_aio_consumer.getmany = AsyncMock(return_value={tp: [msg]})
+        polls = {"n": 0}
+
+        async def getmany(timeout_ms=0):
+            # A real poll hands over the batch once, then waits for new records (it never spins without yielding).
+            polls["n"] += 1
+            if polls["n"] == 1:
+                return {tp: [msg]}
+            await asyncio.sleep(0.01)
+            return {}
+
+        mock_aio_consumer.getmany = getmany
         
         mock_consumer_class.return_value = mock_aio_consumer
 

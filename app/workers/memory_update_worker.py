@@ -37,6 +37,7 @@ from app.core.config import settings
 from app.events.dispatcher import EventDispatcher
 from app.services.summary_service import _as_utc
 from app.core.metrics import MEMORY_UPDATE_RESULTS
+from app.workers.retry_support import schedule_retry_or_park
 from app.utils.message_ids import uuid7_datetime
 
 logger = logging.getLogger("memory_service.workers.memory_update_worker")
@@ -84,7 +85,7 @@ def turn_identity(payload: dict) -> dict:
 # Ingestion failures are retried through the same retry_jobs table the other workers use (RetryScheduler re-publishes the
 # original payload to the memory-update topic after an exponential backoff); after this many attempts the job is parked
 # as FAILED (the dead-letter record) instead of being retried forever.
-MAX_INGEST_ATTEMPTS = 5
+from app.workers.retry_support import MAX_ATTEMPTS as MAX_INGEST_ATTEMPTS  # noqa: E402
 JOB_TYPE = "memory_update"
 
 
@@ -177,33 +178,7 @@ class MemoryUpdateWorker:
 
     def _schedule_retry_or_park(self, payload: Optional[dict], raw: bytes, exc: Exception) -> None:
         """Writes the retry job (or, past the attempt limit / for an undecodable payload, a FAILED dead-letter record)."""
-        if self.cassandra_repo is None:
-            raise RuntimeError("no retry store configured")
-        now = datetime.now(timezone.utc)
-        error = f"{type(exc).__name__}: {exc}"[:500]
-        decodable = isinstance(payload, dict) and bool(payload.get("conversation_id"))
-        attempt = int(payload.get("attempt_count", 0)) if decodable else MAX_INGEST_ATTEMPTS
-        # Never retry what cannot succeed: an undecodable/foreign payload goes straight to the dead-letter record.
-        if decodable and attempt + 1 < MAX_INGEST_ATTEMPTS and not isinstance(exc, (KeyError, ValueError)):
-            retry_payload = {**payload, "attempt_count": attempt + 1}
-            backoff = 2 ** (attempt + 1)
-            status, next_retry, outcome = "PENDING", now + timedelta(seconds=backoff), "retry_scheduled"
-            stored = json.dumps(retry_payload)
-        else:
-            status, next_retry, outcome = "FAILED", now, "dead_lettered"
-            stored = json.dumps(payload) if decodable else raw.decode("utf-8", errors="replace")[:20000]
-        self.cassandra_repo.insert_retry_job({
-            "status": status,
-            "next_retry": next_retry,
-            "job_id": uuid.uuid4(),
-            "job_type": JOB_TYPE,
-            "payload": stored,
-            "retry_count": attempt + 1 if status == "PENDING" else attempt,
-            "max_retry": MAX_INGEST_ATTEMPTS,
-            "last_error": error if status == "PENDING" else f"Dead-lettered: {error}",
-            "created_at": now,
-        })
-        MEMORY_UPDATE_RESULTS.labels(outcome=outcome).inc()
+        MEMORY_UPDATE_RESULTS.labels(outcome=schedule_retry_or_park(self.cassandra_repo, JOB_TYPE, payload, raw, exc)).inc()
 
     async def _replace_discarded_answer(self, payload: dict, conversation_id: str) -> None:
         """A regenerated answer REPLACES the one it supersedes in the durable window (and the cached one), instead of

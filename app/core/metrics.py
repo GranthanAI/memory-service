@@ -119,7 +119,7 @@ COMPACTION_RESULTS = Counter(
 BRANCH_SUMMARY_RESULTS = Counter(
     "memory_branch_summary_total",
     "Outcome of ensuring a parent summary exists at a new branch point",
-    ["outcome"],     # not_a_branch | present | requested | unavailable | skipped | error
+    ["outcome"],     # not_a_branch | present | requested | unavailable | skipped | error | retry_scheduled | dead_lettered
 )
 IDLE_COMPACTION_RESULTS = Counter(
     "memory_idle_compaction_total",
@@ -129,7 +129,7 @@ IDLE_COMPACTION_RESULTS = Counter(
 CONVERSATION_DELETE_RESULTS = Counter(
     "memory_conversation_delete_total",
     "Outcome of purging a deleted conversation",
-    ["outcome"],     # purged | skipped | ignored | error
+    ["outcome"],     # purged | skipped | ignored | error | retry_scheduled | dead_lettered | rewound
 )
 MEMORY_UPDATE_RESULTS = Counter(
     "memory_update_ingest_results_total",
