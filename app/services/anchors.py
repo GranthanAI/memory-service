@@ -15,6 +15,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from app.core.config import settings
+
 KINDS = ("identifier", "decision", "constraint", "open_item", "correction")
 JUDGED_KINDS = ("decision", "constraint", "open_item", "correction")
 MAX_ANCHOR_CHARS = 300
@@ -61,7 +63,7 @@ class Anchor:
     kind: str
     text: str
     source_message_id: str = ""
-    status: str = "active"            # active | open | done | superseded
+    status: str = "active"            # active | open | done | superseded | unconfirmed (said only by the assistant)
 
     @property
     def anchor_id(self) -> str:
@@ -90,20 +92,32 @@ def hard_entities(text: str) -> List[str]:
     return out
 
 
+def is_assistant_origin(message: Dict[str, Any]) -> bool:
+    """True for text the assistant wrote. Pinned facts come from the user and from document-sourced text (tool / document
+    messages); a message without a role is treated as the user's (older callers)."""
+    return settings.ANCHOR_USER_ONLY_PINNING and str(message.get("role") or "").lower() in ("assistant", "model")
+
+
 def extract_identifiers(messages: Sequence[Dict[str, Any]], limit: int = 40) -> List[Anchor]:
-    """Deterministic identifier anchors from message text, each tied to the message it first appeared in."""
-    anchors: List[Anchor] = []
-    seen = set()
+    """Deterministic identifier anchors from message text, each tied to the message it first appeared in.
+
+    Identifiers from user / document text are 'active' (pinned). Identifiers only the assistant mentioned are
+    'unconfirmed': stored, never rendered as pinned facts, promoted when the user later types them."""
+    confirmed: List[Anchor] = []
+    unconfirmed: List[Anchor] = []
+    seen_confirmed, seen_unconfirmed = set(), set()
     for m in messages:
+        assistant = is_assistant_origin(m)
         for token in hard_entities(str(m.get("content") or "")):
             key = token.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            anchors.append(Anchor("identifier", token, str(m.get("message_id") or "")))
-            if len(anchors) >= limit:
-                return anchors
-    return anchors
+            if assistant:
+                if key not in seen_unconfirmed and len(unconfirmed) < limit:
+                    seen_unconfirmed.add(key)
+                    unconfirmed.append(Anchor("identifier", token, str(m.get("message_id") or ""), "unconfirmed"))
+            elif key not in seen_confirmed and len(confirmed) < limit:
+                seen_confirmed.add(key)
+                confirmed.append(Anchor("identifier", token, str(m.get("message_id") or "")))
+    return confirmed + [a for a in unconfirmed if a.text.lower() not in seen_confirmed]
 
 
 def parse_llm_anchors(raw: str, messages: Sequence[Dict[str, Any]]) -> tuple:
@@ -121,7 +135,9 @@ def parse_llm_anchors(raw: str, messages: Sequence[Dict[str, Any]]) -> tuple:
             continue
         index = item.get("message")
         source = str(messages[index].get("message_id")) if isinstance(index, int) and 0 <= index < len(messages) else ""
-        anchors.append(Anchor(kind, text[:MAX_ANCHOR_CHARS], source, "open" if kind == "open_item" else "active"))
+        origin = messages[index] if isinstance(index, int) and 0 <= index < len(messages) else {}
+        status = "unconfirmed" if is_assistant_origin(origin) else ("open" if kind == "open_item" else "active")
+        anchors.append(Anchor(kind, text[:MAX_ANCHOR_CHARS], source, status))
     done = [" ".join(str(t).split()) for t in (data.get("done") or []) if str(t).strip()]
     return anchors, done
 
@@ -134,7 +150,9 @@ def merge_ledger(existing: Iterable[Dict[str, Any]], new: Iterable[Anchor], done
         a = Anchor(row["kind"], row["text"], row.get("source_message_id") or "", row.get("status") or "active")
         by_id[a.anchor_id] = a
     for a in new:
-        by_id.setdefault(a.anchor_id, a)
+        current = by_id.get(a.anchor_id)
+        if current is None or (current.status == "unconfirmed" and a.status != "unconfirmed"):
+            by_id[a.anchor_id] = a          # new, or the user / a document has now confirmed what only the assistant said
     for done in done_texts:
         nd = normalize(done)
         for aid, a in list(by_id.items()):
@@ -183,6 +201,8 @@ def validate_summary(
 
     # 1. nothing that was pinned before has disappeared
     for row in prior_ledger:
+        if row.get("status") == "unconfirmed":      # never pinned, so the summary may drop it
+            continue
         text = normalize(row["text"])
         if text not in ledger_norm and text not in summary_norm:
             report.lost_anchors.append(row["text"])

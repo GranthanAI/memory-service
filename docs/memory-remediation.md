@@ -116,7 +116,7 @@ Cassandra migrations 6-9 run at memory-service startup (additive, re-runnable). 
 `LLM_MODEL_VERSION` [""], `ANCESTOR_VERSION_LOOKBACK` [50], `ANCESTOR_BRIDGE_MAX_TOKENS` [1500], `CORE_PROFILE_ENABLED` [true],
 `RETRIEVAL_INCLUDE_PREVIOUS_TURN` [true], `EXPLICIT_MEMORY_FAST_PATH` [true], `IDLE_COMPACTION_ENABLED` [true],
 `IDLE_COMPACTION_MINUTES` [30], `DELETE_FACTS_WITH_CONVERSATION` [true], `ANCHOR_LEDGER_ENABLED` [true],
-`ANCHOR_LLM_EXTRACTION` [true], `ANCHOR_RENDER_MAX_CHARS` [3000], `SUMMARY_VALIDATION_RETRIES` [1], `HISTORY_SEARCH_ENABLED` [true].
+`ANCHOR_LLM_EXTRACTION` [true], `ANCHOR_RENDER_MAX_CHARS` [3000], `SUMMARY_VALIDATION_RETRIES` [1], `HISTORY_SEARCH_ENABLED` [true]. `ANCHOR_USER_ONLY_PINNING` [true]: pin only user and document-sourced text; assistant-origin items are stored `unconfirmed` and never rendered in the Pinned Facts ledger (llm-service renders only what the ledger returns, so its contract is unchanged).
 llm-service: `PROMPT_HISTORY_AS_MESSAGES` [**false**: changes every prompt's shape; enable after a canary],
 `PROMPT_RETRIEVED_HISTORY_ENABLED` [true].
 

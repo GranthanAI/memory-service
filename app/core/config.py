@@ -169,6 +169,9 @@ class SystemSettings(BaseSettings):
     # validation of every new summary against it. Off = the previous behaviour (no ledger, no validation).
     ANCHOR_LEDGER_ENABLED: bool = True
     ANCHOR_LLM_EXTRACTION: bool = True          # judgement-based kinds via the model; identifiers are always deterministic
+    # Pin only text the user typed or that came from documents/tools; what the assistant said is stored 'unconfirmed' and never
+    # rendered as an exact, never-dropped Pinned Fact. Default ON: fixes assistant guesses becoming "facts". False = old behaviour.
+    ANCHOR_USER_ONLY_PINNING: bool = True
     ANCHOR_RENDER_MAX_CHARS: int = 3000         # size of the ledger shown next to the summary
     SUMMARY_VALIDATION_RETRIES: int = 1         # one corrective retry, then the batch stays unsummarized
     # Context assembly: what stays verbatim next to a summary, and how far back a stale summary is bridged.
