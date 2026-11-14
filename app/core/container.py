@@ -131,6 +131,8 @@ class Container:
         self.redis_repo = RedisRepository(self.redis_client)
         self.processed_event_repo = ProcessedEventRepository(self.cassandra_session)
         self.memory_repo = MemoryRepository(self.cassandra_repo, self.redis_repo)
+        from app.services import usage_metering
+        usage_metering.configure(self.cassandra_repo)        # usage.metered events go through the existing outbox
 
         # 4. Setup Services
         # llm_service must be constructed before SummaryService, which only

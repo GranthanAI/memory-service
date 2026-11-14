@@ -173,3 +173,11 @@ HISTORY_SEARCH_SECONDS = Histogram(
     "Duration of one older-message search",
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
 )
+
+
+# --- billing integration (integration plan P8) ---
+MEMORY_USAGE_ESTIMATED = Counter(
+    "memory_usage_estimated_total", "LLM calls whose token usage was estimated (the provider reported none)", ["provider", "model"])
+MEMORY_USAGE_EVENTS = Counter("memory_usage_events_total", "usage.metered events written to the outbox", ["feature"])
+MEMORY_UNMETERED_CALLS = Counter(
+    "memory_unmetered_calls_total", "Paid LLM calls made outside a metered job (a bug: they cannot be billed)")

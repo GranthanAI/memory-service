@@ -114,6 +114,11 @@ class LLMManager:
 
                 except Exception as e:
                     last_error = e
+                    if isinstance(e, asyncio.TimeoutError) and getattr(self.provider, "meters_usage", False):
+                        # the request reached the provider and may have been processed: report its estimated input
+                        from app.services.usage_metering import record_call
+                        record_call(provider=self.provider.provider_name, model=model or getattr(self.provider, "default_model", "?"),
+                                    messages=messages, timed_out=True)
                     logger.warning(f"LLM call failed (attempt {attempt}/{max_retries}): {e}")
                     if attempt < max_retries:
                         # Exponential backoff: 2^attempt * 0.5s

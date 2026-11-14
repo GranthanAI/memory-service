@@ -17,6 +17,7 @@ from app.models.memory import MemoryState
 from app.repositories.cassandra_repository import CassandraRepository
 from app.services.memory_service import MemoryService
 from app.services.summary_service import SummaryService
+from app.services.usage_metering import metered_job
 from app.core.logging import set_log_context, clear_log_context
 
 logger = logging.getLogger("memory_service.workers.summary_worker")
@@ -92,41 +93,49 @@ class SummaryWorker:
                             )
 
                             logger.info(f"Processing summary request for conversation: {conversation_id}")
+                            # One metered job per request: a bounded (branch) summary, a compaction (pressure / idle / stale read) or a plain summary.
+                            feature = ("memory.branch_summary" if payload.get("upto_message_id")
+                                       else "memory.compaction" if payload.get("reason") in ("pressure", "idle", "stale_read")
+                                       else "memory.summary")
+                            job_key = f"{feature}:{tp.topic}:{tp.partition}:{msg.offset}"
 
-                            # 1. Transition snapshot to SUMMARIZING
-                            snapshot = await self.memory_service.transition_state(
-                                conversation_id, MemoryState.SUMMARIZING
-                            )
+                            async with metered_job(feature, job_key, user_id, conversation_id,
+                                                   payload.get("request_message_id")):
+                                # 1. Transition snapshot to SUMMARIZING
+                                snapshot = await self.memory_service.transition_state(
+                                    conversation_id, MemoryState.SUMMARIZING
+                                )
 
-                            # 2. Call SummaryService to execute Incremental Summarization
-                            # A branch request bounds the summary at the branch message (payload.upto_message_id).
-                            bounds = {"upto_message_id": payload["upto_message_id"]} if payload.get("upto_message_id") else {}
-                            updated_snap = await self.summary_service.process_incremental_summary(
-                                conversation_id, **bounds
-                            )
+                                # 2. Call SummaryService to execute Incremental Summarization
+                                # A branch request bounds the summary at the branch message (payload.upto_message_id).
+                                bounds = {"upto_message_id": payload["upto_message_id"]} if payload.get("upto_message_id") else {}
+                                updated_snap = await self.summary_service.process_incremental_summary(
+                                    conversation_id, **bounds
+                                )
 
-                            # 3. Transition snapshot to FACT_PENDING
-                            await self.memory_service.transition_state(
-                                conversation_id, MemoryState.FACT_PENDING
-                            )
+                                # 3. Transition snapshot to FACT_PENDING
+                                await self.memory_service.transition_state(
+                                    conversation_id, MemoryState.FACT_PENDING
+                                )
 
-                            # 4. Schedule outbox job for Fact Worker
-                            outbox_job = {
-                                "status": "PENDING",
-                                "created_at": datetime.now(timezone.utc),
-                                "job_id": uuid.uuid4(),
-                                "topic": settings.KAFKA_FACT_TOPIC,
-                                "conversation_id": conversation_id,
-                                "payload": json.dumps({
+                                # 4. Schedule outbox job for Fact Worker
+                                outbox_job = {
+                                    "status": "PENDING",
+                                    "created_at": datetime.now(timezone.utc),
+                                    "job_id": uuid.uuid4(),
+                                    "topic": settings.KAFKA_FACT_TOPIC,
                                     "conversation_id": conversation_id,
-                                    "user_id": user_id,
-                                    "version": updated_snap.get("summary_version") or version,
-                                    # the exact messages this summary job consumed (capped; newest kept)
-                                    "message_ids": list(updated_snap.get("consumed_message_ids") or [])[-120:],
-                                }),
-                                "attempt_count": 0
-                            }
-                            self.cassandra_repo.insert_outbox_job(outbox_job)
+                                    "payload": json.dumps({
+                                        "conversation_id": conversation_id,
+                                        "user_id": user_id,
+                                        "version": updated_snap.get("summary_version") or version,
+                                        # the exact messages this summary job consumed (capped; newest kept)
+                                        "message_ids": list(updated_snap.get("consumed_message_ids") or [])[-120:],
+                                    **({"request_message_id": payload["request_message_id"]} if payload.get("request_message_id") else {}),
+                                    }),
+                                    "attempt_count": 0
+                                }
+                                self.cassandra_repo.insert_outbox_job(outbox_job)
 
                         except Exception as e:
                             logger.error(f"Error in SummaryWorker processing job: {e}")

@@ -20,6 +20,7 @@ from app.repositories.cassandra_repository import CassandraRepository
 from app.repositories.memory_repository import MemoryRepository
 from app.services.memory_service import MemoryService
 from app.core.logging import set_log_context, clear_log_context
+from app.services.usage_metering import metered_job
 
 logger = logging.getLogger("memory_service.workers.fact_worker")
 
@@ -121,84 +122,88 @@ class FactWorker:
                             )
 
                             logger.info(f"Processing fact extraction request for conversation: {conversation_id}")
+                            job_key = f"memory.facts:{tp.topic}:{tp.partition}:{msg.offset}"
 
-                            # Explicit-memory / idle jobs are side-channel: they run next to the snapshot state machine,
-                            # not through it (the snapshot is usually ACTIVE, which has no edge to EXTRACTING_FACTS).
-                            reason = payload.get("reason")
-                            side_channel = reason in SIDE_CHANNEL_REASONS
-                            message_ids = [str(i) for i in (payload.get("message_ids") or [])]
+                            async with metered_job("memory.facts", job_key, user_id, conversation_id,
+                                                   payload.get("request_message_id")):
+                                # Explicit-memory / idle jobs are side-channel: they run next to the snapshot state machine,
+                                # not through it (the snapshot is usually ACTIVE, which has no edge to EXTRACTING_FACTS).
+                                reason = payload.get("reason")
+                                side_channel = reason in SIDE_CHANNEL_REASONS
+                                message_ids = [str(i) for i in (payload.get("message_ids") or [])]
 
-                            # 1. Transition snapshot to EXTRACTING_FACTS
-                            if not side_channel:
-                                await self.memory_service.transition_state(
-                                    conversation_id, MemoryState.EXTRACTING_FACTS
-                                )
+                                # 1. Transition snapshot to EXTRACTING_FACTS
+                                if not side_channel:
+                                    await self.memory_service.transition_state(
+                                        conversation_id, MemoryState.EXTRACTING_FACTS
+                                    )
 
-                            # 2. Retrieve the conversation summary & recent messages for context
-                            summary_text = await self.memory_repo.get_summary(conversation_id) or ""
-                            recent_messages = await self.memory_repo.get_recent_messages(conversation_id, limit=20)
+                                # 2. Retrieve the conversation summary & recent messages for context
+                                summary_text = await self.memory_repo.get_summary(conversation_id) or ""
+                                recent_messages = await self.memory_repo.get_recent_messages(conversation_id, limit=20)
                             
-                            chronological_messages = list(reversed(recent_messages))
-                            messages_payload = [
-                                {
-                                    "message_id": m["message_id"],
-                                    "role": m["role"],
-                                    "content": m["content"],
-                                    "created_at": m.get("created_at").isoformat() if isinstance(m.get("created_at"), datetime) else str(m.get("created_at"))
-                                }
-                                for m in chronological_messages
-                            ]
+                                chronological_messages = list(reversed(recent_messages))
+                                messages_payload = [
+                                    {
+                                        "message_id": m["message_id"],
+                                        "role": m["role"],
+                                        "content": m["content"],
+                                        "created_at": m.get("created_at").isoformat() if isinstance(m.get("created_at"), datetime) else str(m.get("created_at"))
+                                    }
+                                    for m in chronological_messages
+                                ]
 
-                            # 3. Call internal LLM Service to extract facts
-                            from app.schemas.llm import FactExtractRequest
-                            # The summary alone loses explicit statements ("remember that...", rules the user
-                            # set), so the user's own recent words are included as evidence.
-                            user_lines = [
-                                f"- {str(m['content']).strip()[:300]}"
-                                for m in chronological_messages
-                                if m.get("role") == "user" and str(m.get("content") or "").strip()
-                            ][-10:]
-                            notes = summary_text
-                            if user_lines:
-                                notes = "\n".join([summary_text, "", "The user's own recent messages:", *user_lines])
-                            if message_ids:
-                                # Extract from EXACTLY the messages this job is about; the summary is only context.
-                                wanted = set(message_ids)
-                                consumed = [m for m in self.cassandra_repo.get_recent_messages(conversation_id, limit=400)
-                                            if str(m.get("message_id")) in wanted]
-                                consumed.sort(key=lambda m: (m.get("created_at"), str(m.get("message_id"))))
-                                if consumed:
-                                    notes = build_extraction_notes(summary_text, consumed)
-                            extract_request = FactExtractRequest(summary=notes)
+                                # 3. Call internal LLM Service to extract facts
+                                from app.schemas.llm import FactExtractRequest
+                                # The summary alone loses explicit statements ("remember that...", rules the user
+                                # set), so the user's own recent words are included as evidence.
+                                user_lines = [
+                                    f"- {str(m['content']).strip()[:300]}"
+                                    for m in chronological_messages
+                                    if m.get("role") == "user" and str(m.get("content") or "").strip()
+                                ][-10:]
+                                notes = summary_text
+                                if user_lines:
+                                    notes = "\n".join([summary_text, "", "The user's own recent messages:", *user_lines])
+                                if message_ids:
+                                    # Extract from EXACTLY the messages this job is about; the summary is only context.
+                                    wanted = set(message_ids)
+                                    consumed = [m for m in self.cassandra_repo.get_recent_messages(conversation_id, limit=400)
+                                                if str(m.get("message_id")) in wanted]
+                                    consumed.sort(key=lambda m: (m.get("created_at"), str(m.get("message_id"))))
+                                    if consumed:
+                                        notes = build_extraction_notes(summary_text, consumed)
+                                extract_request = FactExtractRequest(summary=notes)
 
-                            facts = await self._extract_facts(user_id, conversation_id, extract_request)
-                            logger.info(f"Extracted {len(facts)} facts from conversation '{conversation_id}'.")
+                                facts = await self._extract_facts(user_id, conversation_id, extract_request)
+                                logger.info(f"Extracted {len(facts)} facts from conversation '{conversation_id}'.")
 
-                            # 4. Transition snapshot to EMBEDDING_PENDING
-                            if side_channel:
-                                updated_snap = {"fact_version": version}
-                            else:
-                                updated_snap = await self.memory_service.transition_state(
-                                    conversation_id, MemoryState.EMBEDDING_PENDING
-                                )
+                                # 4. Transition snapshot to EMBEDDING_PENDING
+                                if side_channel:
+                                    updated_snap = {"fact_version": version}
+                                else:
+                                    updated_snap = await self.memory_service.transition_state(
+                                        conversation_id, MemoryState.EMBEDDING_PENDING
+                                    )
 
-                            # 5. Schedule outbox job for Embedding Worker
-                            outbox_job = {
-                                "status": "PENDING",
-                                "created_at": datetime.now(timezone.utc),
-                                "job_id": uuid.uuid4(),
-                                "topic": settings.KAFKA_EMBEDDING_TOPIC,
-                                "conversation_id": conversation_id,
-                                "payload": json.dumps({
+                                # 5. Schedule outbox job for Embedding Worker
+                                outbox_job = {
+                                    "status": "PENDING",
+                                    "created_at": datetime.now(timezone.utc),
+                                    "job_id": uuid.uuid4(),
+                                    "topic": settings.KAFKA_EMBEDDING_TOPIC,
                                     "conversation_id": conversation_id,
-                                    "user_id": user_id,
-                                    "facts": facts,
-                                    "version": updated_snap.get("fact_version") or version,
-                                    **({"reason": reason} if side_channel else {}),
-                                }),
-                                "attempt_count": 0
-                            }
-                            self.cassandra_repo.insert_outbox_job(outbox_job)
+                                    "payload": json.dumps({
+                                        "conversation_id": conversation_id,
+                                        "user_id": user_id,
+                                        "facts": facts,
+                                        **({"request_message_id": payload["request_message_id"]} if payload.get("request_message_id") else {}),
+                                        "version": updated_snap.get("fact_version") or version,
+                                        **({"reason": reason} if side_channel else {}),
+                                    }),
+                                    "attempt_count": 0
+                                }
+                                self.cassandra_repo.insert_outbox_job(outbox_job)
 
                         except Exception as e:
                             logger.error(f"Error in FactWorker processing job: {e}")

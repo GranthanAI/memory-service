@@ -31,6 +31,13 @@ async def lifespan(app: FastAPI):
     container = Container()
     await container.init_resources()
     
+    # Kafka compression codecs (gzip, snappy, lz4, zstd): other services publish compressed batches; a missing codec would wedge
+    # a consumer on its first such batch. And: is the configured model one billing can price?
+    from app.events.codecs import check_kafka_codecs
+    check_kafka_codecs()
+    from app.services.usage_metering import check_model_in_billing_catalog
+    await check_model_in_billing_catalog()
+
     # 3. Perform Boot-time startup validation checks
     from app.core.startup_validation import validate_startup_dependencies
     await validate_startup_dependencies(container)

@@ -117,10 +117,13 @@ class EventDispatcher:
             COMPACTION_REQUESTS.labels(reason=reason).inc()
             snapshot["state"] = MemoryState.SUMMARY_PENDING.value
             outbox_topic = settings.KAFKA_SUMMARY_TOPIC
+            from app.services.usage_metering import REQUEST_MESSAGE_ID
             outbox_payload = {
                 "conversation_id": conversation_id,
                 "user_id": envelope.user_id,
-                "version": snapshot["summary_version"]
+                "version": snapshot["summary_version"],
+                "reason": reason,                                     # count | pressure: tells billing a compaction from a summary
+                **({"request_message_id": REQUEST_MESSAGE_ID.get()} if REQUEST_MESSAGE_ID.get() else {}),
             }
         else:
             # Fall back to ACTIVE if it was READY before a new message arrives

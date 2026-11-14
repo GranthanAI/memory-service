@@ -17,6 +17,9 @@ class GroqProvider(BaseLLMProvider):
     Groq API strategy implementation of BaseLLMProvider.
     """
 
+    meters_usage = True                      # its calls are paid and reported to usage_metering
+    provider_name = "groq"
+
     def __init__(self, client: GroqClient, default_model: str):
         self.client = client
         self.default_model = default_model

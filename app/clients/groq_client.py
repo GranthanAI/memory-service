@@ -62,4 +62,7 @@ class GroqClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        from app.services.usage_metering import record_call      # every paid call is metered (plan 4.9)
+        record_call(provider="groq", model=model, usage=getattr(response, "usage", None), messages=messages, output_text=content)
+        return content

@@ -17,6 +17,7 @@ from app.models.memory import MemoryState
 from app.clients.embedding_client import EmbeddingClient
 from app.services.memory_service import MemoryService
 from app.services.long_memory_service import LongMemoryService
+from app.services.usage_metering import metered_job
 
 logger = logging.getLogger("memory_service.workers.embedding_worker")
 
@@ -121,11 +122,14 @@ class EmbeddingWorker:
 
                             # Merge facts with merge policy
                             if incoming_facts:
-                                stats = await self.long_memory_service.merge_user_facts(
-                                    user_id=user_id,
-                                    conversation_id=conversation_id,
-                                    incoming_facts=incoming_facts
-                                )
+                                # merge_user_facts may ask the model to judge how a new fact relates to existing ones (a paid call)
+                                async with metered_job("memory.facts", f"memory.facts.merge:{tp.topic}:{tp.partition}:{msg.offset}",
+                                                       user_id, conversation_id, payload.get("request_message_id")):
+                                    stats = await self.long_memory_service.merge_user_facts(
+                                        user_id=user_id,
+                                        conversation_id=conversation_id,
+                                        incoming_facts=incoming_facts
+                                    )
                                 logger.info(f"Fact merge statistics for user {user_id}: {stats}")
 
                             # Transition snapshot to READY -> ACTIVE (side-channel jobs never entered the state machine)

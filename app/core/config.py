@@ -27,6 +27,22 @@ class SystemSettings(BaseSettings):
     HTTP_HOST: str = "0.0.0.0"
     HTTP_PORT: int = 8000
 
+    # ─── Billing integration (integration plan P8) ───────────────────────────
+    # NOTE: billing's gRPC is on 127.0.0.1:50061; this service's OWN gRPC (MEMORY_CONTEXT_GRPC_PORT) is on 50051. Use 127.0.0.1,
+    # never localhost, on Windows.
+    BILLING_GRPC_TARGET: str = "127.0.0.1:50061"
+    BILLING_SERVICE_URL: str = "http://127.0.0.1:8090"      # REST: the model catalog check at startup
+    BILLING_SERVICE_TOKEN: str = ""
+    BILLING_LIMITS_ENABLED: bool = False                    # the per-plan memory_facts cap (default off: today's behaviour)
+    BILLING_ENTITLEMENTS_DEADLINE_SECONDS: float = 0.300
+    BILLING_BREAKER_FAILURES: int = 5
+    BILLING_BREAKER_RESET_SECONDS: float = 30.0
+    ENTITLEMENTS_CACHE_SECONDS: int = 60
+    ENTITLEMENTS_STALE_SECONDS: int = 3600
+    ENTITLEMENTS_CHANGED_TOPIC: str = "entitlements.changed"
+    USER_DELETED_TOPIC: str = "user.deleted"
+    USAGE_METERED_TOPIC: str = "usage.metered"
+
     # ─── Kafka ────────────────────────────────────────────────────────────────
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
     KAFKA_GROUP_ID: str = "memory-service-consumers"

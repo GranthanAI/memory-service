@@ -158,7 +158,12 @@ class MemoryUpdateWorker:
             payload = json.loads(raw.decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("payload is not a JSON object")
-            await self._process_turn(payload)
+            from app.services.usage_metering import REQUEST_MESSAGE_ID
+            token = REQUEST_MESSAGE_ID.set(payload.get("request_message_id") or None)
+            try:
+                await self._process_turn(payload)
+            finally:
+                REQUEST_MESSAGE_ID.reset(token)
             MEMORY_UPDATE_RESULTS.labels(outcome="ingested").inc()
             return True
         except Exception as exc:
@@ -209,7 +214,8 @@ class MemoryUpdateWorker:
             "status": "PENDING", "created_at": datetime.now(timezone.utc), "job_id": uuid.uuid4(),
             "topic": settings.KAFKA_FACT_TOPIC, "conversation_id": conversation_id,
             "payload": json.dumps({"conversation_id": conversation_id, "user_id": user_id, "version": 0,
-                                   "reason": "explicit", "message_ids": [user_message_id]}),
+                                   "reason": "explicit", "message_ids": [user_message_id],
+                                   **({"request_message_id": payload["request_message_id"]} if payload.get("request_message_id") else {})}),
             "attempt_count": 0})
         MEMORY_UPDATE_RESULTS.labels(outcome="explicit_memory_queued").inc()
 
