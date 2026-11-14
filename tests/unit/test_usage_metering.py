@@ -259,3 +259,12 @@ async def test_model_not_in_billing_catalog_logs_a_warning(monkeypatch, caplog):
     assert await usage_metering.check_model_in_billing_catalog() is True
     monkeypatch.setattr(settings, "LLM_PROVIDER", "mock")
     assert await usage_metering.check_model_in_billing_catalog() is None
+
+
+async def test_the_health_probe_is_a_system_call_not_an_unmetered_bug(sink, monkeypatch):
+    from app.core.metrics import MEMORY_SYSTEM_CALLS
+    svc, comp, manager = groq_stack([completion("pong", 3, 1)], monkeypatch)
+    system_before, unmetered_before = MEMORY_SYSTEM_CALLS._value.get(), MEMORY_UNMETERED_CALLS._value.get()
+    assert await manager.check_health() is True
+    assert MEMORY_SYSTEM_CALLS._value.get() == system_before + 1
+    assert MEMORY_UNMETERED_CALLS._value.get() == unmetered_before and sink.jobs == []

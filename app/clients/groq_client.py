@@ -49,6 +49,7 @@ class GroqClient:
         model: str,
         temperature: float = 0.2,
         max_tokens: int = 1024,
+        system: bool = False,
     ) -> str:
         """
         Sends a chat completion request to the Groq API.
@@ -64,5 +65,5 @@ class GroqClient:
         )
         content = response.choices[0].message.content
         from app.services.usage_metering import record_call      # every paid call is metered (plan 4.9)
-        record_call(provider="groq", model=model, usage=getattr(response, "usage", None), messages=messages, output_text=content)
+        record_call(provider="groq", model=model, usage=getattr(response, "usage", None), messages=messages, output_text=content, system=system)
         return content

@@ -51,6 +51,7 @@ class GroqProvider(BaseLLMProvider):
                 model=self.default_model,
                 temperature=0.0,
                 max_tokens=5,
+                system=True,                         # the probe is the service's own, not a user's job
             )
             return True
         except Exception as e:

@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from app.core.config import settings
-from app.core.metrics import MEMORY_UNMETERED_CALLS, MEMORY_USAGE_ESTIMATED, MEMORY_USAGE_EVENTS
+from app.core.metrics import MEMORY_SYSTEM_CALLS, MEMORY_UNMETERED_CALLS, MEMORY_USAGE_ESTIMATED, MEMORY_USAGE_EVENTS
 
 logger = logging.getLogger("memory_service.services.usage_metering")
 
@@ -72,9 +72,12 @@ def _estimate(messages: Optional[list], text: Optional[str]) -> tuple[int, int]:
 
 
 def record_call(*, provider: str, model: str, usage: Any = None, messages: Optional[list] = None,
-                output_text: Optional[str] = None, timed_out: bool = False) -> None:
+                output_text: Optional[str] = None, timed_out: bool = False, system: bool = False) -> None:
     """One call that reached the provider. `usage` is the provider's usage object (or None): its prompt/completion token
     counts are used as reported, otherwise they are estimated. A timed-out attempt reports an estimated input and no output."""
+    if system:                                    # the service's own health probe: a few tokens, no user to bill
+        MEMORY_SYSTEM_CALLS.inc()
+        return
     prompt = getattr(usage, "prompt_tokens", None)
     completion = getattr(usage, "completion_tokens", None)
     details = getattr(usage, "prompt_tokens_details", None)

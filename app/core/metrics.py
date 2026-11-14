@@ -182,3 +182,5 @@ MEMORY_USAGE_EVENTS = Counter("memory_usage_events_total", "usage.metered events
 MEMORY_UNMETERED_CALLS = Counter(
     "memory_unmetered_calls_total", "Paid LLM calls made outside a metered job (a bug: they cannot be billed)")
 MEMORY_FACT_CAP = Counter("memory_fact_cap_total", "New facts not stored because the user's plan memory_facts cap was reached")
+MEMORY_SYSTEM_CALLS = Counter(
+    "memory_system_llm_calls_total", "Provider calls made by the service itself (health probes), attributable to no user and not billed")
