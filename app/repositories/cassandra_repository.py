@@ -454,6 +454,11 @@ class CassandraRepository:
     def add_fact_tombstone(self, user_id: str, statement_hash: str) -> None:
         self.session.execute(self._add_tombstone, (user_id, statement_hash, datetime.now(timezone.utc)))
 
+    def delete_user_memory_controls(self, user_id: str) -> None:
+        """user.deleted: the user's memory on/off row and every tombstone of a deleted wording."""
+        self.session.execute("DELETE FROM user_memory_settings WHERE user_id = %s", (user_id,))
+        self.session.execute("DELETE FROM user_fact_tombstones WHERE user_id = %s", (user_id,))
+
     def get_fact_tombstones(self, user_id: str) -> set:
         return {row.statement_hash for row in self.session.execute(self._get_tombstones, (user_id,))}
 

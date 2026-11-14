@@ -181,3 +181,4 @@ MEMORY_USAGE_ESTIMATED = Counter(
 MEMORY_USAGE_EVENTS = Counter("memory_usage_events_total", "usage.metered events written to the outbox", ["feature"])
 MEMORY_UNMETERED_CALLS = Counter(
     "memory_unmetered_calls_total", "Paid LLM calls made outside a metered job (a bug: they cannot be billed)")
+MEMORY_FACT_CAP = Counter("memory_fact_cap_total", "New facts not stored because the user's plan memory_facts cap was reached")

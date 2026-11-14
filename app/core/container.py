@@ -146,8 +146,11 @@ class Container:
         self.compaction_scheduler = CompactionScheduler(self.redis_client, self.cassandra_repo)
         self.summary_service = SummaryService(self.memory_repo, self.cassandra_repo, self.llm_service,
                                               scheduler=self.compaction_scheduler)
+        from app.clients.billing_client import billing_client
+        from app.services.entitlements_service import EntitlementsService
+        self.entitlements = EntitlementsService(billing_client, self.redis_client)
         self.long_memory_service = LongMemoryService(
-            self.cassandra_repo, self.milvus_repo, judge=self.llm_service.judge_fact_relation)
+            self.cassandra_repo, self.milvus_repo, judge=self.llm_service.judge_fact_relation, entitlements=self.entitlements)
         self.ranking_service = RankingService()
 
         # 5. Setup Retrieval & Context services
@@ -241,6 +244,18 @@ class Container:
         )
         await self.embedding_worker.start()
 
+        # entitlements.changed (billing) and user.deleted (auth): drop the cached plan limits; user.deleted also deletes the
+        # user's memory data.
+        from app.services.user_deletion import UserDeletionService
+        self.user_deletion_service = UserDeletionService(
+            self.cassandra_repo, self.milvus_repo, self.redis_client,
+            purge_conversation=self.conversation_delete_worker.purge)     # the existing conversation-delete path
+        from app.workers.billing_events_worker import BillingEventsWorker
+        self.billing_events_worker = BillingEventsWorker(
+            entitlements=self.entitlements, processed_event_repo=self.processed_event_repo,
+            user_deleter=getattr(self, "user_deletion_service", None))
+        await self.billing_events_worker.start()
+
         logger.info("✓ Dependency injection container wired successfully.")
 
     async def shutdown_resources(self) -> None:
@@ -255,6 +270,7 @@ class Container:
             "conversation_delete_worker",
             "fact_worker",
             "embedding_worker",
+            "billing_events_worker",
         ):
             worker = getattr(self, worker_name, None)
             if worker:

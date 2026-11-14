@@ -11,6 +11,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.config import settings
 from app.core.security import get_current_user_id
 from app.services.user_memory_service import STATEMENT_MAX, FactNotFoundError, UserMemoryService
 
@@ -41,6 +42,8 @@ class MemoryFact(BaseModel):
 class MemoryFactList(BaseModel):
     items: List[MemoryFact]
     memory_enabled: bool
+    facts_used: int = 0                    # how many memories the user has
+    facts_limit: Optional[int] = None      # the plan's cap; -1 = unlimited; null when plan limits are not switched on
 
 
 class FactUpdate(BaseModel):
@@ -82,7 +85,14 @@ async def list_facts(request: Request, user_id: str = Depends(get_current_user_i
         items = service.list_facts(user_id)
     except Exception:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Memories are unavailable right now.")
-    return {"items": items, "memory_enabled": service.get_settings(user_id)["memory_enabled"]}
+    limit = None
+    if settings.BILLING_LIMITS_ENABLED:
+        entitlements = getattr(getattr(request.app.state, "container", None), "entitlements", None)
+        if entitlements is not None:
+            from app.services.entitlements_service import limit_of
+            limit = limit_of(await entitlements.get(user_id), "memory_facts")
+    return {"items": items, "memory_enabled": service.get_settings(user_id)["memory_enabled"],
+            "facts_used": len(items), "facts_limit": limit}
 
 
 @router.patch("/facts/{fact_id}", response_model=MemoryFact)

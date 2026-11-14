@@ -52,3 +52,7 @@ test:
 clean:
 	rm -rf __pycache__ .pytest_cache .venv build dist
 	find . -type d -name "__pycache__" -exec rm -r {} +
+
+# Regenerate the billing gRPC stubs from proto/billing (Windows without make: .venv\Scripts\python scripts\gen_billing_proto.py)
+proto:
+	python scripts/gen_billing_proto.py

@@ -42,11 +42,21 @@ class LongMemoryService:
     """
 
     def __init__(self, cassandra_repo: CassandraRepository, milvus_repo: MilvusRepository,
-                 judge: Optional[FactJudge] = None):
+                 judge: Optional[FactJudge] = None, entitlements=None):
         self.cassandra_repo = cassandra_repo
         self.milvus_repo = milvus_repo
         self.controls = MemoryControls(cassandra_repo)
         self.judge = judge
+        self.entitlements = entitlements      # EntitlementsService; None = no plan limits
+
+    async def _fact_cap(self, user_id: str) -> Optional[int]:
+        """The plan's memory_facts limit, or None when it does not apply (BILLING_LIMITS_ENABLED off, no entitlements
+        service, or unlimited = -1)."""
+        if not settings.BILLING_LIMITS_ENABLED or self.entitlements is None:
+            return None
+        from app.services.entitlements_service import limit_of
+        limit = limit_of(await self.entitlements.get(user_id), "memory_facts")
+        return None if limit < 0 else limit
 
     # ------------------------------------------------------------------ helpers
 
@@ -157,7 +167,8 @@ class LongMemoryService:
             return stats
         forgotten = self.controls.tombstones(user_id)
 
-        existing = self._existing_by_key(user_id)
+        existing = self._existing_by_key(user_id)     # the user's ACTIVE facts: its size is the count the plan cap is checked against
+        cap = await self._fact_cap(user_id)
 
         for fact in incoming_facts:
             # 1. Policy: is it a durable, user-specific, important statement?
@@ -191,7 +202,7 @@ class LongMemoryService:
             candidates = [h for h in hits
                           if (h.get("category") in (None, category)) and h["distance"] >= CANDIDATE_MIN_SIMILARITY]
             if not candidates:
-                self._insert_new(user_id, conversation_id, category, statement, importance, vector, key, existing, stats)
+                self._insert_new(user_id, conversation_id, category, statement, importance, vector, key, existing, stats, cap)
                 continue
 
             verdict = await self._relation(statement, candidates)
@@ -203,7 +214,7 @@ class LongMemoryService:
                 relation, target = ("same" if same_memory else "different"), candidates[0]
 
             if relation == "different":
-                self._insert_new(user_id, conversation_id, category, statement, importance, vector, key, existing, stats)
+                self._insert_new(user_id, conversation_id, category, statement, importance, vector, key, existing, stats, cap)
                 continue
 
             old_importance = target["importance"]
@@ -228,7 +239,16 @@ class LongMemoryService:
 
         return stats
 
-    def _insert_new(self, user_id, conversation_id, category, statement, importance, vector, key, existing, stats) -> None:
+    def _insert_new(self, user_id, conversation_id, category, statement, importance, vector, key, existing, stats,
+                    cap: Optional[int] = None) -> None:
+        if cap is not None and len(existing) >= cap:
+            # At the plan's cap: no NEW fact is stored (nothing is replaced, nothing is deleted; existing facts stay readable
+            # and editable, and deleting one frees a slot). Superseding a fact keeps the count, so it is still allowed.
+            from app.core.metrics import MEMORY_FACT_CAP
+            MEMORY_FACT_CAP.inc()
+            stats["capped"] = stats.get("capped", 0) + 1
+            logger.info("memory_fact_cap_reached user=%s active_facts=%s cap=%s", user_id, len(existing), cap)
+            return
         fact_id = self._write(user_id=user_id, conversation_id=conversation_id, category=category,
                               statement=statement, importance=importance, vector=vector, version=1)
         existing[key] = {"fact_id": fact_id, "category": category, "statement": statement,
