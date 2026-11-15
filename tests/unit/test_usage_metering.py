@@ -261,10 +261,17 @@ async def test_model_not_in_billing_catalog_logs_a_warning(monkeypatch, caplog):
     assert await usage_metering.check_model_in_billing_catalog() is None
 
 
-async def test_the_health_probe_is_a_system_call_not_an_unmetered_bug(sink, monkeypatch):
+async def test_the_health_probe_is_free_and_neither_a_system_nor_an_unmetered_call(sink, monkeypatch):
+    """G8: readiness asks Groq for its model list (free) instead of a completion, so nothing is metered or counted."""
     from app.core.metrics import MEMORY_SYSTEM_CALLS
-    svc, comp, manager = groq_stack([completion("pong", 3, 1)], monkeypatch)
+    svc, comp, manager = groq_stack([], monkeypatch)                # no completion is queued: one would fail the probe
+    manager.provider.client.client.models = SimpleNamespace(list=lambda: _models())
     system_before, unmetered_before = MEMORY_SYSTEM_CALLS._value.get(), MEMORY_UNMETERED_CALLS._value.get()
     assert await manager.check_health() is True
-    assert MEMORY_SYSTEM_CALLS._value.get() == system_before + 1
+    assert MEMORY_SYSTEM_CALLS._value.get() == system_before        # no paid call at all
     assert MEMORY_UNMETERED_CALLS._value.get() == unmetered_before and sink.jobs == []
+
+
+async def _models():
+    return SimpleNamespace(data=[object(), object()])
+

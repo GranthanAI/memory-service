@@ -43,6 +43,12 @@ class GroqClient:
                 f"max={settings.LLM_POOL_MAX_CONNECTIONS}, keepalive={settings.LLM_POOL_MAX_KEEPALIVE_CONNECTIONS}."
             )
 
+    async def list_models(self) -> int:
+        """GET /models: a free call (no tokens, no cost, no usage event). Returns how many models the key can see."""
+        self.connect()
+        page = await self.client.models.list()  # type: ignore[union-attr]
+        return len(getattr(page, "data", None) or [])
+
     async def chat_completion(
         self,
         messages: list,
