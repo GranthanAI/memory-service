@@ -58,9 +58,11 @@ class LLMManager:
         model: str = None,
         temperature: float = None,
         max_tokens: int = None,
+        job_type: str = "memory",
     ) -> str:
         """
-        Delegates generation to the provider, wrapped in circuit breaker and retries.
+        Delegates generation to the provider, wrapped in circuit breaker and retries. `job_type` labels the metrics.
+        An empty result is retried ONCE at once with the output cap doubled (reasoning can use up max_tokens).
         """
         if getattr(self.provider, "provider_name", "") == "groq":
             max_tokens = await self._groq_gate(messages, model, max_tokens)   # may raise GroqBudgetDeferred
@@ -88,6 +90,7 @@ class LLMManager:
             temp = temperature if temperature is not None else settings.LLM_TEMPERATURE
             tokens = max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS
 
+            provider_is_groq = getattr(self.provider, "provider_name", "") == "groq"
             last_error = None
             for attempt in range(1, max_retries + 1):
                 try:
@@ -112,6 +115,8 @@ class LLMManager:
                                 )
                         elif self._state == "CLOSED":
                             self._failures = 0
+                    if provider_is_groq and not (result or "").strip():
+                        result = await self._retry_empty(messages, model, temp, tokens, job_type, result, timeout)
                     return result
 
                 except Exception as e:
@@ -150,13 +155,24 @@ class LLMManager:
 
             raise last_error
 
+    async def _retry_empty(self, messages, model, temp, tokens, job_type, first, timeout):
+        """The first answer was empty or blank: ask once more, now with twice the output cap (at most MEMORY_JOB_RETRY_MAX_TOKENS).
+        If that is empty too the (empty) result goes back to the caller, whose own failure path handles it."""
+        from app.clients.groq_budget import MEMORY_JOB_EMPTY_OUTPUT
+
+        bigger = min(tokens * 2, settings.MEMORY_JOB_RETRY_MAX_TOKENS)
+        MEMORY_JOB_EMPTY_OUTPUT.labels(type=job_type).inc()
+        logger.warning("memory_job_empty_output type=%s max_tokens=%d: retrying once with max_tokens=%d", job_type, tokens, bigger)
+        return await asyncio.wait_for(
+            self.provider.generate(messages, model=model, temperature=temp, max_tokens=bigger), timeout=timeout)
+
     async def _groq_gate(self, messages: List[dict], model: Optional[str], max_tokens: Optional[int]) -> int:
         """Memory jobs are background work: cap their output, claim tokens from the shared Groq budget, and never take what an
         answer needs (GROQ_ANSWER_RESERVE_TOKENS). When it is short the job is DEFERRED until the reset, outside the circuit
         breaker and without using a retry attempt."""
         from app.clients.groq_budget import GroqBudgetDeferred, get_budget
 
-        tokens = min(max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS, settings.GROQ_MEMORY_MAX_TOKENS)
+        tokens = settings.MEMORY_JOB_MAX_TOKENS   # every memory job gets the same room; gpt-oss reasoning counts inside it
         from app.clients.groq_budget import estimate_tokens
 
         input_tokens = int(sum(len(str(m.get("content", ""))) for m in messages) / 3.0) + 50

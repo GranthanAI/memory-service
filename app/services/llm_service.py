@@ -59,7 +59,7 @@ class LLMService:
             {"role": "user", "content": ANCHOR_USER_PROMPT_TEMPLATE.format(
                 open_items="\n".join(f"- {t}" for t in open_items) or "(none)", messages=listing)},
         ]
-        return parse_llm_anchors(await self.llm_manager.generate_with_retry(prompt), messages)
+        return parse_llm_anchors(await self.llm_manager.generate_with_retry(prompt, job_type="anchors"), messages)
 
     async def judge_fact_relation(self, new_statement: str, existing: List[str]) -> dict:
         """Explicit LLM judgement of how a new statement relates to existing memories: {"relation": same | correction |
@@ -69,7 +69,7 @@ class LLMService:
             {"role": "system", "content": FACT_JUDGE_SYSTEM_PROMPT},
             {"role": "user", "content": FACT_JUDGE_USER_PROMPT_TEMPLATE.format(new_statement=new_statement, existing=listing)},
         ]
-        raw = await self.llm_manager.generate_with_retry(messages)
+        raw = await self.llm_manager.generate_with_retry(messages, job_type="fact_judge")
         match = re.search(r"\{.*\}", raw or "", re.DOTALL)
         if not match:
             raise ValueError("fact judge returned no JSON")
@@ -112,7 +112,7 @@ class LLMService:
         logger.info("Executing conversation summarization through LLMManager...")
         start_time = time.monotonic()
         try:
-            summary_raw = await self.llm_manager.generate_with_retry(messages)
+            summary_raw = await self.llm_manager.generate_with_retry(messages, job_type="summary")
             latency = time.monotonic() - start_time
             
             # Record metrics
@@ -148,7 +148,7 @@ class LLMService:
         ]
         start_time = time.monotonic()
         try:
-            raw = await self.llm_manager.generate_with_retry(messages, max_tokens=int(target * 1.4) + 64)
+            raw = await self.llm_manager.generate_with_retry(messages, job_type="summary")
             LLM_LATENCY.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="consolidate_summary").observe(
                 time.monotonic() - start_time)
             LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="consolidate_summary", status="success").inc()
@@ -171,7 +171,7 @@ class LLMService:
         logger.info("Executing fact extraction through LLMManager...")
         start_time = time.monotonic()
         try:
-            raw_output = await self.llm_manager.generate_with_retry(messages)
+            raw_output = await self.llm_manager.generate_with_retry(messages, job_type="fact")
             latency = time.monotonic() - start_time
             
             # Record metrics

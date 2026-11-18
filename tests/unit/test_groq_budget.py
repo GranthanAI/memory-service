@@ -100,9 +100,9 @@ async def test_there_is_no_answer_reserve_a_memory_job_may_use_what_groq_says_is
     assert not hasattr(settings, "GROQ_ANSWER_RESERVE_TOKENS")
     await budget.record_headers(M20, hdr(1700, "30s"))
     tokens = await LLMManager._groq_gate(manager(), MSG, None, 2048)
-    assert tokens == 512                                        # capped for memory jobs
+    assert tokens == settings.MEMORY_JOB_MAX_TOKENS             # every memory job gets the same room
     left = (await budget.known_remaining(M20))[0]
-    assert 1700 - left == estimate_tokens(int(3000 / 3.0) + 50, 512)   # input + min(512, 600), nothing held back
+    assert 1700 - left == estimate_tokens(int(3000 / 3.0) + 50, settings.MEMORY_JOB_MAX_TOKENS)   # input + min(cap, 600), nothing held back
 
 
 @pytest.mark.asyncio

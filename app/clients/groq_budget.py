@@ -273,6 +273,7 @@ class GroqBudgetDeferred(Exception):
 
 MEMORY_JOBS_DEFERRED = Counter("memory_jobs_deferred_total", "Memory jobs re-queued because Groq was busy", ["type"])
 MEMORY_JOBS_SUCCEEDED = Counter("memory_jobs_succeeded_total", "Memory jobs that ran to the end", ["type"])
+MEMORY_JOB_EMPTY_OUTPUT = Counter("memory_job_empty_output_total", "Memory LLM jobs whose first answer was empty (retried once with a doubled cap)", ["type"])
 MEMORY_JOBS_DROPPED = Counter("memory_jobs_dropped_total", "Memory jobs dropped after MEMORY_JOB_MAX_AGE_MIN of deferrals", ["type"])
 
 _BUDGET: "GroqBudget | None" = None

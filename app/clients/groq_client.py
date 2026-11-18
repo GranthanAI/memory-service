@@ -12,6 +12,11 @@ from groq import AsyncGroq
 logger = logging.getLogger("memory_service.clients.groq_client")
 
 
+def supports_reasoning_effort(model: str) -> bool:
+    """Groq accepts reasoning_effort for the gpt-oss family only; other models reject the parameter."""
+    return (model or "").startswith("openai/gpt-oss")
+
+
 class GroqClient:
     """
     Adapter client wrapper for the Groq Async SDK.
@@ -67,13 +72,14 @@ class GroqClient:
         from app.clients.groq_budget import GroqBudgetDeferred, get_budget, parse_reset_seconds
 
         completions = self.client.chat.completions
+        extra = {"reasoning_effort": "low"} if supports_reasoning_effort(model) else {}   # keeps reasoning from eating max_tokens
         try:
             if hasattr(type(completions), "with_raw_response"):  # the real SDK: keep the response headers
-                raw = await completions.with_raw_response.create(messages=messages, model=model, temperature=temperature, max_tokens=max_tokens)
+                raw = await completions.with_raw_response.create(messages=messages, model=model, temperature=temperature, max_tokens=max_tokens, **extra)
                 await get_budget().record_headers(model, raw.headers)
                 response = await raw.parse()
             else:
-                response = await completions.create(messages=messages, model=model, temperature=temperature, max_tokens=max_tokens)
+                response = await completions.create(messages=messages, model=model, temperature=temperature, max_tokens=max_tokens, **extra)
         except Exception as exc:
             headers = getattr(getattr(exc, "response", None), "headers", None)
             if headers is not None:

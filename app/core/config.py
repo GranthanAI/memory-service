@@ -168,7 +168,8 @@ class SystemSettings(BaseSettings):
     GROQ_TPM_LIMIT: int = 8000
     GROQ_OUTPUT_ESTIMATE_TOKENS: int = 600    # expected output before Groq's headers are known (never the full max_tokens)
     MEMORY_JOB_MAX_AGE_MIN: int = 120         # a memory job deferred for longer than this is dropped (WARNING + metric)
-    GROQ_MEMORY_MAX_TOKENS: int = 512         # max_tokens of every memory job (summary, facts, branch summary, compaction)
+    MEMORY_JOB_MAX_TOKENS: int = 1024         # max_tokens of every memory LLM job; gpt-oss reasoning tokens count inside it
+    MEMORY_JOB_RETRY_MAX_TOKENS: int = 2048   # cap of the one immediate retry (cap doubled) after an empty result
 
     # ─── Automatic conversation-memory compaction (no user-facing setting) ────────────────────────────────────────
     # A summary is requested when ANY of: SUMMARY_THRESHOLD messages arrived since the last one (the original rule), or
