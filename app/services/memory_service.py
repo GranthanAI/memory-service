@@ -130,7 +130,8 @@ class MemoryService:
         payload: Dict[str, Any],
         error_msg: str,
         attempt_count: int,
-        max_retries: int = 5
+        max_retries: int = 5,
+        defer_seconds: Optional[float] = None,
     ) -> None:
         """
         Handles retry job registration and state transitions when pipeline stages fail.
@@ -138,6 +139,19 @@ class MemoryService:
         """
         now = datetime.now(timezone.utc)
         payload_str = json.dumps(payload)
+
+        if defer_seconds is not None:
+            # The shared Groq budget is short: run this job again after the reset. Not a failure: no attempt is used.
+            from app.clients.groq_budget import MEMORY_JOBS_DEFERRED
+
+            MEMORY_JOBS_DEFERRED.labels(job_type=job_type).inc()
+            logger.info(f"Deferring {job_type} job for conversation {conversation_id} by {defer_seconds:.0f}s (Groq budget short)")
+            self.cassandra_repo.insert_retry_job({
+                "status": "PENDING", "next_retry": now + timedelta(seconds=defer_seconds), "job_id": uuid.uuid4(),
+                "job_type": job_type, "payload": payload_str, "retry_count": attempt_count, "max_retry": max_retries,
+                "last_error": "deferred: groq token budget", "created_at": now,
+            })
+            return
 
         if attempt_count < max_retries:
             # Exponential backoff retry scheduling: next_retry = now + 2^(attempt_count) seconds

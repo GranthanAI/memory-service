@@ -62,6 +62,8 @@ class LLMManager:
         """
         Delegates generation to the provider, wrapped in circuit breaker and retries.
         """
+        if getattr(self.provider, "provider_name", "") == "groq":
+            max_tokens = await self._groq_gate(messages, model, max_tokens)   # may raise GroqBudgetDeferred
         async with self._semaphore:
             # 1. Circuit Breaker Check
             async with self._lock:
@@ -145,6 +147,20 @@ class LLMManager:
                     )
 
             raise last_error
+
+    async def _groq_gate(self, messages: List[dict], model: Optional[str], max_tokens: Optional[int]) -> int:
+        """Memory jobs are background work: cap their output, claim tokens from the shared Groq budget, and never take what an
+        answer needs (GROQ_ANSWER_RESERVE_TOKENS). When it is short the job is DEFERRED until the reset, outside the circuit
+        breaker and without using a retry attempt."""
+        from app.clients.groq_budget import GroqBudgetDeferred, get_budget
+
+        tokens = min(max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS, settings.GROQ_MEMORY_MAX_TOKENS)
+        estimate = int(sum(len(str(m.get("content", ""))) for m in messages) / 3.0) + 50 + tokens
+        target = model or getattr(self.provider, "default_model", "") or settings.LLM_MODEL
+        wait = await get_budget().acquire(target, estimate, "memory")
+        if wait > 0:
+            raise GroqBudgetDeferred(wait + 1.0, target)
+        return tokens
 
     async def check_health(self) -> bool:
         """

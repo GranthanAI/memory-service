@@ -147,7 +147,8 @@ class SummaryWorker:
                                     job_type="summary",
                                     payload=payload,
                                     error_msg=str(e),
-                                    attempt_count=payload.get("attempt_count", 0)
+                                    attempt_count=payload.get("attempt_count", 0),
+                                    defer_seconds=getattr(e, "wait_s", None),
                                 )
                         finally:
                             clear_log_context()

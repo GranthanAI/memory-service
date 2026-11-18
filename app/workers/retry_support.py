@@ -19,6 +19,18 @@ def schedule_retry_or_park(cassandra_repo, job_type: str, payload: Optional[dict
     if cassandra_repo is None:
         raise RuntimeError("no retry store configured")
     now = datetime.now(timezone.utc)
+    if getattr(exc, "wait_s", None) is not None and isinstance(payload, dict):
+        # GroqBudgetDeferred: the shared Groq budget is short. Run it again after the reset; this uses no attempt.
+        from app.clients.groq_budget import MEMORY_JOBS_DEFERRED
+
+        MEMORY_JOBS_DEFERRED.labels(job_type=job_type).inc()
+        attempt0 = int(payload.get("attempt_count", 0))
+        cassandra_repo.insert_retry_job({
+            "status": "PENDING", "next_retry": now + timedelta(seconds=float(exc.wait_s)), "job_id": uuid.uuid4(),
+            "job_type": job_type, "payload": json.dumps(payload), "retry_count": attempt0, "max_retry": MAX_ATTEMPTS,
+            "last_error": "deferred: groq token budget", "created_at": now,
+        })
+        return "deferred"
     error = f"{type(exc).__name__}: {exc}"[:500]
     body = payload.get("payload", payload) if isinstance(payload, dict) else None       # envelopes wrap the event payload
     decodable = isinstance(payload, dict) and bool(isinstance(body, dict) and body.get(required_key))

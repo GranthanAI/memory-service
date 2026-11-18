@@ -163,6 +163,11 @@ class SystemSettings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 1024
+    # Shared per-model Groq token budget (also used by llm-service): the same Redis in both (C1).
+    GROQ_BUDGET_REDIS_URL: str = "redis://127.0.0.1:6379/0"
+    GROQ_TPM_LIMIT: int = 8000
+    GROQ_ANSWER_RESERVE_TOKENS: int = 4000    # tokens memory jobs must leave for answers
+    GROQ_MEMORY_MAX_TOKENS: int = 512         # max_tokens of every memory job (summary, facts, branch summary, compaction)
 
     # ─── Automatic conversation-memory compaction (no user-facing setting) ────────────────────────────────────────
     # A summary is requested when ANY of: SUMMARY_THRESHOLD messages arrived since the last one (the original rule), or
