@@ -151,7 +151,7 @@ class SummaryWorker:
                                     payload=payload,
                                     error_msg=str(e),
                                     attempt_count=payload.get("attempt_count", 0),
-                                    defer_seconds=getattr(e, "wait_s", None),
+                                    **({"defer_seconds": e.wait_s} if getattr(e, "wait_s", None) is not None else {}),
                                 )
                         finally:
                             clear_log_context()
