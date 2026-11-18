@@ -204,9 +204,12 @@ class FactWorker:
                                     "attempt_count": 0
                                 }
                                 self.cassandra_repo.insert_outbox_job(outbox_job)
+                                from app.clients.groq_budget import MEMORY_JOBS_SUCCEEDED
+                                MEMORY_JOBS_SUCCEEDED.labels(type="fact").inc()
 
                         except Exception as e:
-                            logger.error(f"Error in FactWorker processing job: {e}")
+                            if getattr(e, "wait_s", None) is None:
+                                logger.error(f"Error in FactWorker processing job: {e}")
                             if payload and conversation_id != "unknown":
                                 # Handle retry/DLQ scheduling
                                 await self.memory_service.handle_failure(

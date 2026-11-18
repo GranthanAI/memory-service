@@ -115,6 +115,8 @@ class LLMManager:
                     return result
 
                 except Exception as e:
+                    if getattr(e, "wait_s", None) is not None:
+                        raise  # GroqBudgetDeferred (Groq said 429 / wait): no retry here, no breaker failure; the job is re-queued
                     last_error = e
                     if isinstance(e, asyncio.TimeoutError) and getattr(self.provider, "meters_usage", False):
                         # the request reached the provider and may have been processed: report its estimated input
@@ -155,11 +157,14 @@ class LLMManager:
         from app.clients.groq_budget import GroqBudgetDeferred, get_budget
 
         tokens = min(max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS, settings.GROQ_MEMORY_MAX_TOKENS)
-        estimate = int(sum(len(str(m.get("content", ""))) for m in messages) / 3.0) + 50 + tokens
+        from app.clients.groq_budget import estimate_tokens
+
+        input_tokens = int(sum(len(str(m.get("content", ""))) for m in messages) / 3.0) + 50
+        estimate = estimate_tokens(input_tokens, tokens, settings.GROQ_OUTPUT_ESTIMATE_TOKENS)   # never the full max_tokens
         target = model or getattr(self.provider, "default_model", "") or settings.LLM_MODEL
         wait = await get_budget().acquire(target, estimate, "memory")
         if wait > 0:
-            raise GroqBudgetDeferred(wait + 1.0, target)
+            raise GroqBudgetDeferred(wait, target)   # Groq's own reset time
         return tokens
 
     async def check_health(self) -> bool:

@@ -126,6 +126,8 @@ class LLMService:
             
             logger.info(f"Summarization succeeded. Latency: {latency:.3f}s. Est prompt tokens: {prompt_tokens_est}, completion tokens: {completion_tokens_est}")
         except Exception as e:
+            if getattr(e, "wait_s", None) is not None:
+                raise  # Groq busy: the worker defers the job (INFO memory_job_deferred), nothing failed
             latency = time.monotonic() - start_time
             LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="summarize", status="failure").inc()
             logger.error(f"Summarization failed. Latency: {latency:.3f}s. Error: {e}")
@@ -183,6 +185,8 @@ class LLMService:
             
             logger.info(f"Fact extraction succeeded. Latency: {latency:.3f}s. Est prompt tokens: {prompt_tokens_est}, completion tokens: {completion_tokens_est}")
         except Exception as e:
+            if getattr(e, "wait_s", None) is not None:
+                raise  # Groq busy: the worker defers the job, nothing failed
             latency = time.monotonic() - start_time
             LLM_REQUESTS.labels(provider=settings.LLM_PROVIDER, model=settings.LLM_MODEL, action="extract_facts", status="failure").inc()
             logger.error(f"Fact extraction failed. Latency: {latency:.3f}s. Error: {e}")

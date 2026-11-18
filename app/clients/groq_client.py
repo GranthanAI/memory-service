@@ -6,6 +6,7 @@ Handles low-level API operations, authentication, and communication.
 """
 
 import logging
+import re
 from groq import AsyncGroq
 
 logger = logging.getLogger("memory_service.clients.groq_client")
@@ -63,12 +64,29 @@ class GroqClient:
         if not self.client:
             self.connect()
 
-        response = await self.client.chat.completions.create(
-            messages=messages,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        from app.clients.groq_budget import GroqBudgetDeferred, get_budget, parse_reset_seconds
+
+        completions = self.client.chat.completions
+        try:
+            if hasattr(type(completions), "with_raw_response"):  # the real SDK: keep the response headers
+                raw = await completions.with_raw_response.create(messages=messages, model=model, temperature=temperature, max_tokens=max_tokens)
+                await get_budget().record_headers(model, raw.headers)
+                response = await raw.parse()
+            else:
+                response = await completions.create(messages=messages, model=model, temperature=temperature, max_tokens=max_tokens)
+        except Exception as exc:
+            headers = getattr(getattr(exc, "response", None), "headers", None)
+            if headers is not None:
+                await get_budget().record_headers(model, headers)
+            if getattr(exc, "status_code", None) == 429 or "429" in str(exc) or "rate limit" in str(exc).lower():
+                wait = None
+                if headers is not None:
+                    wait = parse_reset_seconds(headers.get("retry-after")) or parse_reset_seconds(headers.get("x-ratelimit-reset-tokens"))
+                if wait is None:
+                    m = re.search(r"try again in (\d+(?:\.\d+)?)\s*(ms|s)", str(exc), re.I)
+                    wait = (float(m.group(1)) / (1000.0 if m.group(2).lower() == "ms" else 1.0)) if m else 20.0
+                raise GroqBudgetDeferred(wait, model) from exc
+            raise
         content = response.choices[0].message.content
         from app.services.usage_metering import record_call      # every paid call is metered (plan 4.9)
         record_call(provider="groq", model=model, usage=getattr(response, "usage", None), messages=messages, output_text=content, system=system)

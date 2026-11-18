@@ -141,16 +141,10 @@ class MemoryService:
         payload_str = json.dumps(payload)
 
         if defer_seconds is not None:
-            # The shared Groq budget is short: run this job again after the reset. Not a failure: no attempt is used.
-            from app.clients.groq_budget import MEMORY_JOBS_DEFERRED
+            # Groq is busy: a deferral, not a failure; no attempt is used and the snapshot state is left as it is
+            from app.workers.retry_support import defer_job
 
-            MEMORY_JOBS_DEFERRED.labels(job_type=job_type).inc()
-            logger.info(f"Deferring {job_type} job for conversation {conversation_id} by {defer_seconds:.0f}s (Groq budget short)")
-            self.cassandra_repo.insert_retry_job({
-                "status": "PENDING", "next_retry": now + timedelta(seconds=defer_seconds), "job_id": uuid.uuid4(),
-                "job_type": job_type, "payload": payload_str, "retry_count": attempt_count, "max_retry": max_retries,
-                "last_error": "deferred: groq token budget", "created_at": now,
-            })
+            defer_job(self.cassandra_repo, job_type, payload, defer_seconds, conversation_id)
             return
 
         if attempt_count < max_retries:
