@@ -104,6 +104,41 @@ class GroqBudget:
         except Exception:  # noqa: BLE001
             pass
 
+    async def settle_window(self, model: str, estimate: int, actual: int) -> None:
+        """A finished call used `actual` tokens, not the `estimate` it claimed (prompt + max_tokens): shrink its claim in the
+        sliding window so it stops blocking the next message for a minute."""
+        if estimate == actual:
+            return
+        if self.redis is not None:
+            try:
+                key = f"{PREFIX}{model}:win"
+                for member, score in reversed(await self.redis.zrange(key, 0, -1, withscores=True)):
+                    text = member.decode() if isinstance(member, bytes) else member
+                    ident, tokens = text.split(":")[0], int(text.split(":")[1])
+                    if tokens == estimate:
+                        await self.redis.zrem(key, text)
+                        await self.redis.zadd(key, {f"{ident}:{max(actual, 0)}": score})
+                        return
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        window = self._window.get(model, [])
+        for i in range(len(window) - 1, -1, -1):
+            if window[i][1] == estimate:
+                window[i] = (window[i][0], max(actual, 0))
+                return
+
+    async def available(self, model: str, purpose: str = ANSWER) -> int | None:
+        """Tokens this purpose could claim right now (None when there is no ceiling to measure against)."""
+        floor = self._floor(purpose)
+        known = await self.known_remaining(model)
+        if known is not None:
+            return known[0] - floor
+        if self.tpm_limit <= 0:
+            return None
+        entries = await self._load_window(model, self._now())
+        return self.tpm_limit - floor - sum(t for _, t in entries)
+
     # --- before a call -----------------------------------------------------------------------------------------------
     async def known_remaining(self, model: str) -> tuple[int, float] | None:
         """(tokens left, seconds until reset) while the last response's headers are still current."""
