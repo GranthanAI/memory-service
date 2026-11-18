@@ -209,6 +209,12 @@ class Container:
         )
         asyncio.create_task(self.outbox_worker.start())
 
+        # Re-dispatches the retry_jobs rows (failed jobs AND Groq-busy deferrals) once their next_retry is due. Without it those
+        # rows are written and never run.
+        from app.events.retry_scheduler import RetryScheduler
+        self.retry_scheduler = RetryScheduler(self.cassandra_session, self.kafka_producer)
+        await self.retry_scheduler.start()
+
         self.summary_worker = SummaryWorker(
             cassandra_session=self.cassandra_session,
             memory_service=self.memory_service,
@@ -264,6 +270,7 @@ class Container:
         for worker_name in (
             "memory_update_worker",
             "outbox_worker",
+            "retry_scheduler",
             "summary_worker",
             "branch_summary_worker",
             "idle_compaction_worker",

@@ -99,3 +99,44 @@ async def test_a_non_empty_result_passes_straight_through():
     m, asked = manager(["fine"])
     assert await m.generate_with_retry(MSG, job_type="fact") == "fine"
     assert len(asked) == 1
+
+
+async def test_a_deferred_job_is_redispatched_by_the_scheduler_with_the_same_attempt_and_the_container_starts_it():
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from app.events.retry_scheduler import RetryScheduler
+    from app.workers.retry_support import defer_job
+
+    stored = []
+
+    class Repo:
+        def insert_retry_job(self, job):
+            stored.append(job)
+
+        def get_pending_retry_jobs(self, next_retry_before, limit=50):
+            return [j for j in stored if j["next_retry"] <= next_retry_before + timedelta(minutes=5)]
+
+        def claim_retry_job(self, job):
+            return True
+
+        def delete_retry_job(self, *a):
+            pass
+
+    sent = []
+
+    class Producer:
+        async def publish_task(self, topic, conversation_id, payload):
+            sent.append(payload)
+
+    repo = Repo()
+    defer_job(repo, "summary", {"conversation_id": "c1", "attempt_count": 3}, 4.0, "c1")
+    sched = RetryScheduler.__new__(RetryScheduler)
+    sched.cassandra_repo, sched.producer = repo, Producer()
+    await sched._process_retries()
+    assert sent and sent[0]["attempt_count"] == 3                  # the same attempt: a deferral never counts down the retries
+    assert json.loads(stored[0]["payload"])["deferred_since"] and sent[0]["deferred_since"]
+    # the service actually starts the scheduler (it was written but never started: every retry row sat forever)
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[2] / "app" / "core" / "container.py").read_text(encoding="utf-8")
+    assert "RetryScheduler(" in src and "retry_scheduler.start()" in src and '"retry_scheduler",' in src
