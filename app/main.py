@@ -16,7 +16,9 @@ from prometheus_client import make_asgi_app
 
 from app.api.routers import api_router
 from app.lifespan import lifespan
-from app.core.logging import set_log_context, clear_log_context
+from app.core.logging import set_log_context, clear_log_context, setup_logging
+
+setup_logging(debug_mode=False)   # INFO to stdout (JSON): without it the root logger stays at WARNING and every INFO line is lost
 
 app = FastAPI(
     title="GraphGPT Memory Service",
