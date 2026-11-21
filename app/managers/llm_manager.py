@@ -177,7 +177,7 @@ class LLMManager:
 
         input_tokens = int(sum(len(str(m.get("content", ""))) for m in messages) / 3.0) + 50
         estimate = estimate_tokens(input_tokens, tokens, settings.GROQ_OUTPUT_ESTIMATE_TOKENS)   # never the full max_tokens
-        target = model or getattr(self.provider, "default_model", "") or settings.LLM_MODEL
+        target = model or getattr(self.provider, "default_model", "") or settings.MEMORY_LLM_MODEL or settings.LLM_MODEL
         wait = await get_budget().acquire(target, estimate, "memory")
         if wait > 0:
             raise GroqBudgetDeferred(wait, target)   # Groq's own reset time

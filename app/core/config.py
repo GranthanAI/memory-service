@@ -168,6 +168,9 @@ class SystemSettings(BaseSettings):
     GROQ_TPM_LIMIT: int = 8000
     GROQ_OUTPUT_ESTIMATE_TOKENS: int = 600    # expected output before Groq's headers are known (never the full max_tokens)
     MEMORY_JOB_MAX_AGE_MIN: int = 120         # a memory job deferred for longer than this is dropped (WARNING + metric)
+    # The Groq model every memory job (summary, facts, branch summary, compaction) runs on. Empty = LLM_MODEL. Keep it a model
+    # answers do not default to (they default to gpt-oss-120b): Groq limits tokens per minute per model.
+    MEMORY_LLM_MODEL: str = ""
     MEMORY_JOB_MAX_TOKENS: int = 1024         # max_tokens of every memory LLM job; gpt-oss reasoning tokens count inside it
     MEMORY_JOB_RETRY_MAX_TOKENS: int = 2048   # cap of the one immediate retry (cap doubled) after an empty result
 

@@ -140,3 +140,13 @@ async def test_a_deferred_job_is_redispatched_by_the_scheduler_with_the_same_att
     import pathlib
     src = (pathlib.Path(__file__).resolve().parents[2] / "app" / "core" / "container.py").read_text(encoding="utf-8")
     assert "RetryScheduler(" in src and "retry_scheduler.start()" in src and '"retry_scheduler",' in src
+
+
+async def test_memory_jobs_run_on_memory_llm_model_when_set_else_llm_model(monkeypatch):
+    from app.factories.llm_factory import LLMFactory
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(settings, "MEMORY_LLM_MODEL", "some/helper-model")
+    assert LLMFactory.create_provider().default_model == "some/helper-model"
+    monkeypatch.setattr(settings, "MEMORY_LLM_MODEL", "")
+    assert LLMFactory.create_provider().default_model == settings.LLM_MODEL

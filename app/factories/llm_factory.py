@@ -29,7 +29,7 @@ class LLMFactory:
                 api_key=settings.GROQ_API_KEY,
                 timeout=settings.LLM_TIMEOUT_SECONDS,
             )
-            return GroqProvider(client=groq_client, default_model=settings.LLM_MODEL)
+            return GroqProvider(client=groq_client, default_model=settings.MEMORY_LLM_MODEL or settings.LLM_MODEL)
         elif provider_type == "mock":
             return MockLLMProvider()
         else:
